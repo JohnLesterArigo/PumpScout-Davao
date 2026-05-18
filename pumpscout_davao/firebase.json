@@ -1,0 +1,29 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "pumpscout-davao",
+          "appId": "1:585056190992:android:d73924138616fc9f870095",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "pumpscout-davao",
+          "configurations": {
+            "android": "1:585056190992:android:d73924138616fc9f870095",
+            "ios": "1:585056190992:ios:828420ae61664211870095",
+            "macos": "1:585056190992:ios:828420ae61664211870095",
+            "web": "1:585056190992:web:4e1ace2ed072f24c870095",
+            "windows": "1:585056190992:web:2787e8e1144a5e6d870095"
+          }
+        }
+      }
+    }
+  }
+}

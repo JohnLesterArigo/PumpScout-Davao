@@ -1,0 +1,85 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDoc().data.role == "admin";
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && (!("role" in request.resource.data)
+          || request.resource.data.role == "user");
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == userId
+          && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(["role", "roleUpdatedAt"])
+        );
+    }
+
+    match /priceReports/{reportId} {
+      allow read: if isAdmin()
+        || resource.data.status == "verified"
+        || (signedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == "pending";
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == request.auth.uid
+          && resource.data.status == "pending"
+          && request.resource.data.status == "pending"
+          && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny([
+              "reviewedAt",
+              "reviewedBy",
+              "reviewedByEmail",
+              "rejectionReason"
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    match /stations/{stationId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isAdmin()
+        && request.resource.data.userId is string
+        && request.resource.data.isRead == false;
+
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["isRead", "readAt"])
+        && request.resource.data.isRead == true;
+
+      allow delete: if isAdmin();
+    }
+  }
+}
