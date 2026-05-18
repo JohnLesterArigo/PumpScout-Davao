@@ -633,10 +633,37 @@ class _MapContainerState extends State<MapContainer> {
                         ],
                       ),
                     ),
-                    IconButton(
-                      tooltip: 'Show route',
-                      onPressed: () => showInAppRoute(details),
-                      icon: const Icon(Icons.navigation),
+                    StatefulBuilder(
+                      builder: (context, setActionState) {
+                        final isFavorite = favoriteStationKeys.contains(
+                          _stationFavoriteKey(details),
+                        );
+
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: isFavorite
+                                  ? 'Remove favorite'
+                                  : 'Favorite station',
+                              onPressed: () async {
+                                await toggleSavedStation(details);
+                                if (!context.mounted) return;
+                                setActionState(() {});
+                              },
+                              icon: Icon(
+                                isFavorite ? Icons.star : Icons.star_border,
+                                color: Colors.amber.shade700,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Show route',
+                              onPressed: () => showInAppRoute(details),
+                              icon: const Icon(Icons.navigation),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -795,6 +822,7 @@ class _MapContainerState extends State<MapContainer> {
                             isFavorite: isFavorite,
                             onFavoritePressed: () async {
                               await toggleSavedStation(details);
+                              if (!context.mounted) return;
                               setSheetState(() {});
                             },
                             onOpen: () {
@@ -933,6 +961,14 @@ class _MapContainerState extends State<MapContainer> {
                             details: details,
                             fuelType: selectedFuel,
                             rank: index + 1,
+                            isFavorite: favoriteStationKeys.contains(
+                              _stationFavoriteKey(details),
+                            ),
+                            onFavoritePressed: () async {
+                              await toggleSavedStation(details);
+                              if (!context.mounted) return;
+                              setSheetState(() {});
+                            },
                             onOpen: () {
                               Navigator.of(context).pop();
                               showStationDetailSheet(details);
@@ -1104,6 +1140,8 @@ class _MapContainerState extends State<MapContainer> {
     required StationMarkerDetails details,
     required String fuelType,
     required int rank,
+    required bool isFavorite,
+    required VoidCallback onFavoritePressed,
     required VoidCallback onOpen,
     required VoidCallback onNavigate,
   }) {
@@ -1177,6 +1215,14 @@ class _MapContainerState extends State<MapContainer> {
                   ),
                 ),
               ],
+            ),
+            IconButton(
+              tooltip: isFavorite ? 'Remove favorite' : 'Favorite station',
+              onPressed: onFavoritePressed,
+              icon: Icon(
+                isFavorite ? Icons.star : Icons.star_border,
+                color: Colors.amber.shade700,
+              ),
             ),
             IconButton(
               tooltip: 'Show route',
