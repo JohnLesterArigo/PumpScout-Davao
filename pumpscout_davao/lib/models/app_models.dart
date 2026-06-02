@@ -115,6 +115,7 @@ class UserProfileSummary {
     required this.reportCount,
     required this.role,
     this.lastReportAt,
+    required this.trustBadge,
   });
 
   final String displayName;
@@ -125,6 +126,7 @@ class UserProfileSummary {
   final int reportCount;
   final String role;
   final DateTime? lastReportAt;
+  final ContributorTrustBadge trustBadge;
 
   bool get isAdmin => role.toLowerCase() == 'admin';
 }
@@ -295,6 +297,22 @@ class UserContribution {
   }
 }
 
+class CommunityFeedbackComment {
+  const CommunityFeedbackComment({
+    required this.authorName,
+    required this.comment,
+    required this.reaction,
+    this.createdAt,
+  });
+
+  final String authorName;
+  final String comment;
+  final String reaction;
+  final DateTime? createdAt;
+
+  bool get hasVisibleComment => comment.trim().isNotEmpty;
+}
+
 class CommunityContribution {
   const CommunityContribution({
     required this.id,
@@ -313,7 +331,8 @@ class CommunityContribution {
     this.disagreeCount = 0,
     this.feedbackCount = 0,
     this.myReaction,
-  });
+    List<CommunityFeedbackComment>? publicComments,
+  }) : _publicComments = publicComments;
 
   final String id;
   final String stationName;
@@ -330,7 +349,11 @@ class CommunityContribution {
   final int disagreeCount;
   final int feedbackCount;
   final String? myReaction;
+  final List<CommunityFeedbackComment>? _publicComments;
   final ContributorTrustBadge trustBadge;
+
+  List<CommunityFeedbackComment> get publicComments =>
+      _publicComments ?? const <CommunityFeedbackComment>[];
 
   String get contributorName {
     if (userDisplayName?.trim().isNotEmpty == true) {
@@ -347,6 +370,7 @@ class CommunityContribution {
     required int disagreeCount,
     required int feedbackCount,
     required String? myReaction,
+    List<CommunityFeedbackComment> publicComments = const <CommunityFeedbackComment>[],
   }) {
     final data = doc.data();
     return CommunityContribution(
@@ -365,6 +389,7 @@ class CommunityContribution {
       disagreeCount: disagreeCount,
       feedbackCount: feedbackCount,
       myReaction: myReaction,
+      publicComments: publicComments,
       trustBadge: trustBadge,
     );
   }

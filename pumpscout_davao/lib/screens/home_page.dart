@@ -858,6 +858,12 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
+    final feedbackByReportId = await loadFeedbackAggregatesByReportId();
+    final trustBadge = await buildContributorTrustBadgeForUser(
+      contributorId: user.uid,
+      feedbackByReportId: feedbackByReportId,
+    );
+
     return UserProfileSummary(
       displayName: _stringField(
         userData,
@@ -871,6 +877,7 @@ class _HomePageState extends State<HomePage> {
       reportCount: verifiedReportCount,
       role: _stringField(userData, 'role', fallback: 'user'),
       lastReportAt: lastReportAt,
+      trustBadge: trustBadge,
     );
   }
 
@@ -960,6 +967,19 @@ class _HomePageState extends State<HomePage> {
                   style: const TextStyle(
                     fontWeight: FontWeight.w600,
                   ).copyWith(color: _psMutedTextColor(context)),
+                ),
+                const SizedBox(height: 10),
+                buildContributorTrustBadgeChip(context, profile.trustBadge),
+                const SizedBox(height: 6),
+                Text(
+                  profile.trustBadge.reason,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -1519,6 +1539,80 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+class _CommunityFeedbackDialog extends StatefulWidget {
+  const _CommunityFeedbackDialog({required this.stationName});
+
+  final String stationName;
+
+  @override
+  State<_CommunityFeedbackDialog> createState() =>
+      _CommunityFeedbackDialogState();
+}
+
+class _CommunityFeedbackDialogState extends State<_CommunityFeedbackDialog> {
+  final controller = TextEditingController();
+  String? errorText;
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  void submit() {
+    final comment = controller.text.trim();
+    if (comment.length < 8) {
+      setState(() {
+        errorText = 'Please add at least 8 characters of feedback.';
+      });
+      return;
+    }
+
+    Navigator.of(context).pop(comment);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Give feedback'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.stationName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            minLines: 3,
+            maxLines: 5,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              hintText: 'Share what looks accurate or needs checking.',
+              border: const OutlineInputBorder(),
+              errorText: errorText,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: submit,
+          child: const Text('Submit'),
+        ),
+      ],
+    );
+  }
+}
+
 class _CommunityContributionsPage extends StatefulWidget {
   const _CommunityContributionsPage();
 
@@ -1529,9 +1623,40 @@ class _CommunityContributionsPage extends StatefulWidget {
 
 class _CommunityContributionsPageState
     extends State<_CommunityContributionsPage> {
-  bool isSavingReaction = false;
+  List<CommunityContribution> _items = const [];
+  bool _isLoading = true;
+  bool _isSavingReaction = false;
+  String? _errorMessage;
 
-  Future<List<CommunityContribution>> loadCommunityContributions() async {
+  @override
+  void initState() {
+    super.initState();
+    _reloadContributions();
+  }
+
+  Future<void> _reloadContributions() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final items = await _loadCommunityContributions();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<List<CommunityContribution>> _loadCommunityContributions() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     final snapshot = await FirebaseFirestore.instance
         .collection('priceReports')
@@ -1545,123 +1670,39 @@ class _CommunityContributionsPageState
         return bDate.compareTo(aDate);
       });
 
+    final feedbackByReportId = await loadFeedbackAggregatesByReportId(
+      currentUserId: currentUser?.uid,
+    );
+    final trustCache = <String, ContributorTrustBadge>{};
     final items = <CommunityContribution>[];
+
     for (final doc in docs.take(40)) {
-      QuerySnapshot<Map<String, dynamic>>? feedbackSnapshot;
-      try {
-        feedbackSnapshot = await FirebaseFirestore.instance
-            .collection('contributionFeedback')
-            .where('reportId', isEqualTo: doc.id)
-            .get();
-      } catch (error) {
-        debugPrint('Community feedback load skipped: $error');
-      }
-      var likeCount = 0;
-      var disagreeCount = 0;
-      String? myReaction;
-
-      for (final feedbackDoc in feedbackSnapshot?.docs ?? const []) {
-        final data = feedbackDoc.data();
-        final reaction = _stringField(data, 'reaction');
-        if (reaction == 'like') likeCount += 1;
-        if (reaction == 'disagree') disagreeCount += 1;
-        if (currentUser != null &&
-            _stringField(data, 'userId') == currentUser.uid) {
-          myReaction = reaction;
-        }
-      }
-
       final reportData = doc.data();
       final contributorId = _stringField(reportData, 'userId');
-      final trustBadge = await _buildTrustBadge(
-        contributorId: contributorId,
-        likeCount: likeCount,
-        disagreeCount: disagreeCount,
-      );
+      final feedback =
+          feedbackByReportId[doc.id] ?? const ReportFeedbackAggregate();
+
+      if (!trustCache.containsKey(contributorId)) {
+        trustCache[contributorId] = await buildContributorTrustBadgeForUser(
+          contributorId: contributorId,
+          feedbackByReportId: feedbackByReportId,
+        );
+      }
 
       items.add(
         CommunityContribution.fromFirestore(
           doc: doc,
-          trustBadge: trustBadge,
-          likeCount: likeCount,
-          disagreeCount: disagreeCount,
-          feedbackCount: feedbackSnapshot?.docs.length ?? 0,
-          myReaction: myReaction,
+          trustBadge: trustCache[contributorId]!,
+          likeCount: feedback.likeCount,
+          disagreeCount: feedback.disagreeCount,
+          feedbackCount: feedback.feedbackCount,
+          myReaction: feedback.myReaction,
+          publicComments: feedback.publicComments,
         ),
       );
     }
 
     return items;
-  }
-
-  Future<ContributorTrustBadge> _buildTrustBadge({
-    required String contributorId,
-    required int likeCount,
-    required int disagreeCount,
-  }) async {
-    if (contributorId.isEmpty) {
-      return const ContributorTrustBadge(
-        label: 'Unrated',
-        score: 35,
-        reason: 'Contributor identity is incomplete.',
-      );
-    }
-
-    QuerySnapshot<Map<String, dynamic>> reports;
-    try {
-      reports = await FirebaseFirestore.instance
-          .collection('priceReports')
-          .where('userId', isEqualTo: contributorId)
-          .where('status', isEqualTo: 'verified')
-          .get();
-    } catch (error) {
-      debugPrint('Trust badge fallback used: $error');
-      final fallbackScore = (45 + (likeCount * 5) - (disagreeCount * 10))
-          .clamp(0, 100);
-      return ContributorTrustBadge(
-        label: fallbackScore >= 60 ? 'Reliable' : 'New Scout',
-        score: fallbackScore,
-        reason:
-            'Trust score is based on visible community feedback until report history is available.',
-      );
-    }
-
-    DateTime? lastReportAt;
-    for (final doc in reports.docs) {
-      final createdAt = _dateTimeField(doc.data(), 'createdAt');
-      if (createdAt != null &&
-          (lastReportAt == null || createdAt.isAfter(lastReportAt))) {
-        lastReportAt = createdAt;
-      }
-    }
-
-    final verifiedCount = reports.docs.length;
-    final activeBonus =
-        lastReportAt != null &&
-            DateTime.now().difference(lastReportAt).inDays <= 30
-        ? 10
-        : 0;
-    final score = (35 +
-            (verifiedCount * 9) +
-            activeBonus +
-            (likeCount * 5) -
-            (disagreeCount * 10))
-        .clamp(0, 100);
-
-    final label = score >= 80
-        ? 'AI Trusted'
-        : score >= 60
-        ? 'Reliable'
-        : score >= 40
-        ? 'New Scout'
-        : 'Needs Proof';
-
-    return ContributorTrustBadge(
-      label: label,
-      score: score,
-      reason:
-          '$verifiedCount verified report${verifiedCount == 1 ? '' : 's'}, $likeCount like${likeCount == 1 ? '' : 's'}, $disagreeCount disagreement${disagreeCount == 1 ? '' : 's'}.',
-    );
   }
 
   Future<void> saveReaction(
@@ -1670,64 +1711,64 @@ class _CommunityContributionsPageState
     String comment = '',
   }) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || isSavingReaction) return;
+    if (user == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sign in to agree, disagree, or leave feedback.'),
+        ),
+      );
+      return;
+    }
+    if (_isSavingReaction) return;
 
-    setState(() => isSavingReaction = true);
+    setState(() => _isSavingReaction = true);
     final feedbackId = '${item.id}_${user.uid}';
-    try {
-      await FirebaseFirestore.instance
-          .collection('contributionFeedback')
-          .doc(feedbackId)
-          .set({
-            'reportId': item.id,
-            'userId': user.uid,
-            'userEmail': user.email,
-            'reaction': reaction,
-            'comment': comment.trim(),
-            'updatedAt': Timestamp.now(),
-          }, SetOptions(merge: true));
+    final displayName = user.displayName?.trim();
+    final authorName = displayName != null && displayName.isNotEmpty
+        ? displayName
+        : (user.email?.split('@').first ?? 'PumpScout user');
 
-      if (mounted) setState(() {});
+    try {
+      final docRef = FirebaseFirestore.instance
+          .collection('contributionFeedback')
+          .doc(feedbackId);
+      final existing = await docRef.get();
+      final payload = <String, Object?>{
+        'reportId': item.id,
+        'userId': user.uid,
+        'userEmail': user.email ?? '',
+        'userDisplayName': authorName,
+        'reaction': reaction,
+        'comment': comment.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      if (!existing.exists) {
+        payload['createdAt'] = FieldValue.serverTimestamp();
+      }
+
+      await docRef.set(payload, SetOptions(merge: true));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thanks — your feedback was saved.')),
+      );
+      await _reloadContributions();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Feedback failed: $error')));
     } finally {
-      if (mounted) setState(() => isSavingReaction = false);
+      if (mounted) setState(() => _isSavingReaction = false);
     }
   }
 
   Future<void> promptFeedback(CommunityContribution item) async {
-    final controller = TextEditingController();
     final comment = await showDialog<String>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Give feedback'),
-          content: TextField(
-            controller: controller,
-            minLines: 3,
-            maxLines: 5,
-            decoration: const InputDecoration(
-              hintText: 'Share what looks accurate or needs checking.',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              child: const Text('Submit'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _CommunityFeedbackDialog(stationName: item.stationName),
     );
-    controller.dispose();
     if (comment == null || comment.trim().isEmpty) return;
     await saveReaction(item, 'like', comment: comment);
   }
@@ -1737,47 +1778,49 @@ class _CommunityContributionsPageState
     return Scaffold(
       backgroundColor: _psPageColor(context),
       appBar: const _FullScreenSheetAppBar(title: 'Community'),
-      body: FutureBuilder<List<CommunityContribution>>(
-        future: loadCommunityContributions(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: _psRed));
-          }
+      body: _buildBody(),
+    );
+  }
 
-          if (snapshot.hasError) {
-            final errorText = snapshot.error.toString();
-            final isPermissionError = errorText.contains('permission-denied');
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Text(
-                  isPermissionError
-                      ? 'Could not load community contributions.\nDeploy the updated Firestore rules, then reopen this page.'
-                      : 'Could not load community contributions.\n${snapshot.error}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: _psMutedTextColor(context)),
-                ),
-              ),
-            );
-          }
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: _psRed));
+    }
 
-          final items = snapshot.data ?? const <CommunityContribution>[];
-          if (items.isEmpty) {
-            return Center(
-              child: Text(
-                'No public verified contributions yet.',
-                style: TextStyle(color: _psMutedTextColor(context)),
-              ),
-            );
-          }
+    if (_errorMessage != null) {
+      final isPermissionError = _errorMessage!.contains('permission-denied');
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Text(
+            isPermissionError
+                ? 'Could not load community data (permission denied).\nRun: firebase deploy --only firestore:rules\nThen fully restart the app.'
+                : 'Could not load community contributions.\n$_errorMessage',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _psMutedTextColor(context)),
+          ),
+        ),
+      );
+    }
 
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => _communityCard(items[index]),
-          );
-        },
+    if (_items.isEmpty) {
+      return Center(
+        child: Text(
+          'No public verified contributions yet.',
+          style: TextStyle(color: _psMutedTextColor(context)),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: _psRed,
+      onRefresh: _reloadContributions,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        itemCount: _items.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, index) => _communityCard(_items[index]),
       ),
     );
   }
@@ -1825,7 +1868,7 @@ class _CommunityContributionsPageState
                 ),
               ),
               const SizedBox(width: 8),
-              _trustBadge(item.trustBadge),
+              buildContributorTrustBadgeChip(context, item.trustBadge),
             ],
           ),
           const SizedBox(height: 12),
@@ -1865,44 +1908,78 @@ class _CommunityContributionsPageState
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: isSavingReaction ? null : () => promptFeedback(item),
+                onPressed: _isSavingReaction ? null : () => promptFeedback(item),
                 icon: const Icon(Icons.chat_bubble_outline, size: 17),
                 label: Text('Feedback ${item.feedbackCount}'),
               ),
             ],
           ),
+          if (item.publicComments.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              'Community comments',
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...item.publicComments.map((entry) => _communityCommentTile(entry)),
+          ],
         ],
       ),
     );
   }
 
-  Widget _trustBadge(ContributorTrustBadge badge) {
-    final color = badge.score >= 80
-        ? const Color(0xFF168A4A)
-        : badge.score >= 60
-        ? const Color(0xFF1D70B8)
-        : badge.score >= 40
-        ? const Color(0xFFB54708)
-        : _psRed;
+  Widget _communityCommentTile(CommunityFeedbackComment entry) {
+    final reactionLabel = entry.reaction == 'disagree' ? 'Disagrees' : 'Agrees';
+    final reactionColor = entry.reaction == 'disagree' ? _psRed : const Color(0xFF168A4A);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: _psIsDark(context) ? 0.18 : 0.1),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.36)),
+        color: _psSoftPanelColor(context),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _psBorderColor(context)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.auto_awesome, size: 14, color: color),
-          const SizedBox(width: 5),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.authorName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psPrimaryTextColor(context),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                reactionLabel,
+                style: TextStyle(
+                  color: reactionColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
           Text(
-            '${badge.label} ${badge.score}',
+            entry.comment,
             style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
+              color: _psMutedTextColor(context),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
             ),
           ),
         ],
@@ -1936,7 +2013,7 @@ class _CommunityContributionsPageState
     required VoidCallback onPressed,
   }) {
     return OutlinedButton.icon(
-      onPressed: isSavingReaction ? null : onPressed,
+      onPressed: _isSavingReaction ? null : onPressed,
       icon: Icon(icon, size: 17),
       label: Text(label),
       style: OutlinedButton.styleFrom(
@@ -2586,6 +2663,10 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
       );
 
       if (status == 'verified') {
+        final contributorId = report.userId;
+        if (contributorId != null && contributorId.isNotEmpty) {
+          await persistContributorTrustForUser(contributorId);
+        }
         await widget.onChanged();
       }
       if (!mounted) return;
@@ -3207,6 +3288,43 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
       style: TextStyle(color: _psPrimaryTextColor(context), fontSize: 12),
     );
   }
+}
+
+Widget buildContributorTrustBadgeChip(
+  BuildContext context,
+  ContributorTrustBadge badge,
+) {
+  final color = badge.score >= 80
+      ? const Color(0xFF168A4A)
+      : badge.score >= 60
+      ? const Color(0xFF1D70B8)
+      : badge.score >= 40
+      ? const Color(0xFFB54708)
+      : _psRed;
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: _psIsDark(context) ? 0.18 : 0.1),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: color.withValues(alpha: 0.36)),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.auto_awesome, size: 14, color: color),
+        const SizedBox(width: 5),
+        Text(
+          '${badge.label} ${badge.score}%',
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _AiScreeningConfig {

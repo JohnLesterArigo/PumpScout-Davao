@@ -16,6 +16,26 @@ service cloud.firestore {
         && userDoc().data.role == "admin";
     }
 
+    function isVerifiedPriceReport() {
+      return resource.data.status == "verified";
+    }
+
+    function isOwnFeedbackDoc() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function validFeedbackWrite() {
+      return request.resource.data.userId == request.auth.uid
+        && request.resource.data.reportId is string
+        && request.resource.data.reportId.size() > 0
+        && request.resource.data.reaction in ["like", "disagree"]
+        && request.resource.data.comment is string
+        && (!("userDisplayName" in request.resource.data)
+          || request.resource.data.userDisplayName is string)
+        && (!("userEmail" in request.resource.data)
+          || request.resource.data.userEmail is string);
+    }
+
     match /users/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
 
@@ -34,8 +54,9 @@ service cloud.firestore {
     }
 
     match /priceReports/{reportId} {
+      // Anyone can read verified community posts; owners/admins can read their own pending/rejected.
       allow read: if isAdmin()
-        || resource.data.status == "verified"
+        || isVerifiedPriceReport()
         || (signedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if signedIn()
@@ -83,16 +104,17 @@ service cloud.firestore {
     }
 
     match /contributionFeedback/{feedbackId} {
-      allow read: if signedIn();
+      // Public read so every user can see agree/disagree notes on community posts.
+      allow read: if true;
 
-      allow create, update: if signedIn()
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.reportId is string
-        && request.resource.data.reaction in ["like", "disagree"]
-        && (!("comment" in request.resource.data)
-          || request.resource.data.comment is string);
+      allow create: if signedIn() && validFeedbackWrite();
 
-      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update: if signedIn()
+        && isOwnFeedbackDoc()
+        && validFeedbackWrite()
+        && request.resource.data.reportId == resource.data.reportId;
+
+      allow delete: if isOwnFeedbackDoc() || isAdmin();
     }
   }
 }
