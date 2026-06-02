@@ -159,6 +159,10 @@ class AdminContribution {
     this.userDisplayName,
     this.userEmail,
     this.rejectionReason,
+    this.aiClassification,
+    this.aiConfidence,
+    this.aiReasons = const <String>[],
+    this.needsAdminAttention = false,
   });
 
   final String id;
@@ -177,6 +181,10 @@ class AdminContribution {
   final String? userDisplayName;
   final String? userEmail;
   final String? rejectionReason;
+  final String? aiClassification;
+  final double? aiConfidence;
+  final List<String> aiReasons;
+  final bool needsAdminAttention;
 
   factory AdminContribution.fromFirestore(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
@@ -199,6 +207,14 @@ class AdminContribution {
       userDisplayName: _stringField(data, 'userDisplayName'),
       userEmail: _stringField(data, 'userEmail'),
       rejectionReason: _stringField(data, 'rejectionReason'),
+      aiClassification: _stringField(
+        data,
+        'aiClassification',
+        fallback: 'needs_review',
+      ),
+      aiConfidence: _doubleField(data, 'aiConfidence'),
+      aiReasons: _stringListField(data, 'aiReasons'),
+      needsAdminAttention: data['needsAdminAttention'] == true,
     );
   }
 }
@@ -277,6 +293,93 @@ class UserContribution {
       rejectionReason: _stringField(data, 'rejectionReason'),
     );
   }
+}
+
+class CommunityContribution {
+  const CommunityContribution({
+    required this.id,
+    required this.stationName,
+    required this.brand,
+    required this.createdAt,
+    required this.trustBadge,
+    this.gasoline,
+    this.diesel,
+    this.premium,
+    this.photoUrl,
+    this.userId,
+    this.userDisplayName,
+    this.userEmail,
+    this.likeCount = 0,
+    this.disagreeCount = 0,
+    this.feedbackCount = 0,
+    this.myReaction,
+  });
+
+  final String id;
+  final String stationName;
+  final String brand;
+  final DateTime createdAt;
+  final double? gasoline;
+  final double? diesel;
+  final double? premium;
+  final String? photoUrl;
+  final String? userId;
+  final String? userDisplayName;
+  final String? userEmail;
+  final int likeCount;
+  final int disagreeCount;
+  final int feedbackCount;
+  final String? myReaction;
+  final ContributorTrustBadge trustBadge;
+
+  String get contributorName {
+    if (userDisplayName?.trim().isNotEmpty == true) {
+      return userDisplayName!.trim();
+    }
+    if (userEmail?.trim().isNotEmpty == true) return userEmail!.trim();
+    return 'PumpScout contributor';
+  }
+
+  factory CommunityContribution.fromFirestore({
+    required QueryDocumentSnapshot<Map<String, dynamic>> doc,
+    required ContributorTrustBadge trustBadge,
+    required int likeCount,
+    required int disagreeCount,
+    required int feedbackCount,
+    required String? myReaction,
+  }) {
+    final data = doc.data();
+    return CommunityContribution(
+      id: doc.id,
+      stationName: _stringField(data, 'stationName', fallback: 'Fuel station'),
+      brand: _stringField(data, 'brand'),
+      createdAt: _dateTimeField(data, 'createdAt') ?? DateTime(1970),
+      gasoline: _doubleField(data, 'gasoline'),
+      diesel: _doubleField(data, 'diesel'),
+      premium: _doubleField(data, 'premium'),
+      photoUrl: _stringField(data, 'photoUrl'),
+      userId: _stringField(data, 'userId'),
+      userDisplayName: _stringField(data, 'userDisplayName'),
+      userEmail: _stringField(data, 'userEmail'),
+      likeCount: likeCount,
+      disagreeCount: disagreeCount,
+      feedbackCount: feedbackCount,
+      myReaction: myReaction,
+      trustBadge: trustBadge,
+    );
+  }
+}
+
+class ContributorTrustBadge {
+  const ContributorTrustBadge({
+    required this.label,
+    required this.score,
+    required this.reason,
+  });
+
+  final String label;
+  final int score;
+  final String reason;
 }
 
 class DestinationPlace {

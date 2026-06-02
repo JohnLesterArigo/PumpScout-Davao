@@ -26,6 +26,18 @@ String _stringField(
   return fallback;
 }
 
+List<String> _stringListField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is Iterable) {
+    return value
+        .whereType<Object>()
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+  }
+  return const <String>[];
+}
+
 double? _doubleField(Map<String, dynamic> data, String key) {
   final value = data[key];
   if (value is num) return value.toDouble();
@@ -133,16 +145,6 @@ String _formatDateTime(DateTime dateTime) {
   if (difference.inDays < 7) return '${difference.inDays} days ago';
 
   return '${dateTime.month}/${dateTime.day}/${dateTime.year}';
-}
-
-String _trendLabel(List<double> values) {
-  final first = values.first;
-  final last = values.last;
-  final difference = last - first;
-  if (difference.abs() < 0.01) return 'No meaningful change recently.';
-
-  final direction = difference > 0 ? 'increased' : 'decreased';
-  return 'Gasoline $direction by PHP ${difference.abs().toStringAsFixed(2)}.';
 }
 
 String _profileValue(dynamic value, {required String fallback}) {

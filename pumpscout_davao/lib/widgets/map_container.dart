@@ -718,42 +718,7 @@ class _MapContainerState extends State<MapContainer> {
                 const SizedBox(height: 10),
                 _priceDisclaimer(),
                 const SizedBox(height: 16),
-                Text(
-                  'Gasoline Trend',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                FutureBuilder<List<PriceReport>>(
-                  future: fetchPriceReports(details),
-                  builder: (context, snapshot) {
-                    final reports = snapshot.data ?? const <PriceReport>[];
-                    final values = reports
-                        .map((report) => report.gasoline)
-                        .whereType<double>()
-                        .toList();
-
-                    if (values.length < 2) {
-                      return const Text('No weekly trend yet.');
-                    }
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          height: 92,
-                          width: double.infinity,
-                          child: CustomPaint(
-                            painter: PriceTrendPainter(values),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(_trendLabel(values)),
-                      ],
-                    );
-                  },
-                ),
+                _priceForecastPanel(details),
               ],
             ),
           ),
@@ -1383,6 +1348,157 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
+  Widget _priceForecastPanel(StationMarkerDetails details) {
+    var selectedFuel = 'gasoline';
+
+    return StatefulBuilder(
+      builder: (context, setForecastState) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Price Forecast',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'gasoline', label: Text('Gas')),
+                ButtonSegment(value: 'diesel', label: Text('Diesel')),
+                ButtonSegment(value: 'premium', label: Text('Premium')),
+              ],
+              selected: {selectedFuel},
+              onSelectionChanged: (selection) {
+                setForecastState(() => selectedFuel = selection.first);
+              },
+              showSelectedIcon: false,
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                textStyle: WidgetStateProperty.all(
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            FutureBuilder<List<PriceReport>>(
+              future: fetchPriceReports(details),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 112,
+                    child: Center(
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                  );
+                }
+
+                final reports = snapshot.data ?? const <PriceReport>[];
+                final forecast = forecastFuelPrice(reports, selectedFuel);
+                if (forecast == null) {
+                  return _forecastEmptyState(selectedFuel);
+                }
+
+                return _forecastResultCard(details, forecast);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _forecastEmptyState(String fuelType) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        'Not enough verified ${_fuelLabel(fuelType).toLowerCase()} history yet. Add at least 3 verified reports to show a prediction.',
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+
+  Widget _forecastResultCard(
+    StationMarkerDetails details,
+    FuelPriceForecast forecast,
+  ) {
+    final change = forecast.change;
+    final isIncrease = change > 0.25;
+    final isDecrease = change < -0.25;
+    final color = isIncrease
+        ? const Color(0xFFE94B5A)
+        : isDecrease
+        ? const Color(0xFF1E8E3E)
+        : const Color(0xFFFFA000);
+    final changeText = change.abs() < 0.25
+        ? 'stable'
+        : '${change > 0 ? '+' : '-'}PHP ${change.abs().toStringAsFixed(2)}';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.show_chart, color: color, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${_fuelLabelForStation(details, forecast.fuelType)} next week',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                'PHP ${forecast.predictedPrice.toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 96,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: PriceTrendPainter(
+                forecast.history,
+                predictedValue: forecast.predictedPrice,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Linear regression estimates the price may ${forecast.direction} by $changeText from the latest verified report.',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _priceDisclaimer() {
     return Container(
       width: double.infinity,
@@ -1607,6 +1723,16 @@ class _MapContainerState extends State<MapContainer> {
         photoPublicId = upload?.publicId;
       }
 
+      final photoUploadFailed = image != null && photoUrl == null;
+      final classification = classifyPriceContribution(
+        station: details,
+        gasoline: gasoline,
+        diesel: diesel,
+        premium: premium,
+        hasPhoto: photoUrl != null,
+        photoUploadFailed: photoUploadFailed,
+      );
+
       final reportData = <String, Object?>{
         'stationId': stationRef.id,
         'stationKey': stationKey,
@@ -1621,12 +1747,13 @@ class _MapContainerState extends State<MapContainer> {
         'photoProvider': photoUrl == null ? null : 'cloudinary',
         'photoUrl': photoUrl,
         'photoPublicId': photoPublicId,
-        'photoUploadFailed': image != null && photoUrl == null,
+        'photoUploadFailed': photoUploadFailed,
         'updatedAt': Timestamp.fromDate(now),
         'distanceMeters': details.distanceMeters,
         'userId': user.uid,
         'userEmail': user.email,
         'userDisplayName': user.displayName,
+        ...classification.toFirestore(),
       };
 
       if (existingPendingReport == null) {

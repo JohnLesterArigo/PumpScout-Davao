@@ -441,6 +441,15 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void showCommunityContributionsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const _CommunityContributionsPage(),
+      ),
+    );
+  }
+
   void showFuelConsumptionEditor(
     BuildContext profileContext,
     UserProfileSummary profile,
@@ -1392,6 +1401,11 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.emoji_events_outlined),
           ),
           IconButton(
+            tooltip: 'Community contributions',
+            onPressed: showCommunityContributionsPage,
+            icon: const Icon(Icons.forum_outlined),
+          ),
+          IconButton(
             tooltip: 'Profile',
             onPressed: showProfileSheet,
             icon: const Icon(Icons.account_circle_outlined),
@@ -1500,6 +1514,435 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _CommunityContributionsPage extends StatefulWidget {
+  const _CommunityContributionsPage();
+
+  @override
+  State<_CommunityContributionsPage> createState() =>
+      _CommunityContributionsPageState();
+}
+
+class _CommunityContributionsPageState
+    extends State<_CommunityContributionsPage> {
+  bool isSavingReaction = false;
+
+  Future<List<CommunityContribution>> loadCommunityContributions() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final snapshot = await FirebaseFirestore.instance
+        .collection('priceReports')
+        .where('status', isEqualTo: 'verified')
+        .get();
+
+    final docs = snapshot.docs
+      ..sort((a, b) {
+        final aDate = _dateTimeField(a.data(), 'createdAt') ?? DateTime(1970);
+        final bDate = _dateTimeField(b.data(), 'createdAt') ?? DateTime(1970);
+        return bDate.compareTo(aDate);
+      });
+
+    final items = <CommunityContribution>[];
+    for (final doc in docs.take(40)) {
+      QuerySnapshot<Map<String, dynamic>>? feedbackSnapshot;
+      try {
+        feedbackSnapshot = await FirebaseFirestore.instance
+            .collection('contributionFeedback')
+            .where('reportId', isEqualTo: doc.id)
+            .get();
+      } catch (error) {
+        debugPrint('Community feedback load skipped: $error');
+      }
+      var likeCount = 0;
+      var disagreeCount = 0;
+      String? myReaction;
+
+      for (final feedbackDoc in feedbackSnapshot?.docs ?? const []) {
+        final data = feedbackDoc.data();
+        final reaction = _stringField(data, 'reaction');
+        if (reaction == 'like') likeCount += 1;
+        if (reaction == 'disagree') disagreeCount += 1;
+        if (currentUser != null &&
+            _stringField(data, 'userId') == currentUser.uid) {
+          myReaction = reaction;
+        }
+      }
+
+      final reportData = doc.data();
+      final contributorId = _stringField(reportData, 'userId');
+      final trustBadge = await _buildTrustBadge(
+        contributorId: contributorId,
+        likeCount: likeCount,
+        disagreeCount: disagreeCount,
+      );
+
+      items.add(
+        CommunityContribution.fromFirestore(
+          doc: doc,
+          trustBadge: trustBadge,
+          likeCount: likeCount,
+          disagreeCount: disagreeCount,
+          feedbackCount: feedbackSnapshot?.docs.length ?? 0,
+          myReaction: myReaction,
+        ),
+      );
+    }
+
+    return items;
+  }
+
+  Future<ContributorTrustBadge> _buildTrustBadge({
+    required String contributorId,
+    required int likeCount,
+    required int disagreeCount,
+  }) async {
+    if (contributorId.isEmpty) {
+      return const ContributorTrustBadge(
+        label: 'Unrated',
+        score: 35,
+        reason: 'Contributor identity is incomplete.',
+      );
+    }
+
+    QuerySnapshot<Map<String, dynamic>> reports;
+    try {
+      reports = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('userId', isEqualTo: contributorId)
+          .where('status', isEqualTo: 'verified')
+          .get();
+    } catch (error) {
+      debugPrint('Trust badge fallback used: $error');
+      final fallbackScore = (45 + (likeCount * 5) - (disagreeCount * 10))
+          .clamp(0, 100);
+      return ContributorTrustBadge(
+        label: fallbackScore >= 60 ? 'Reliable' : 'New Scout',
+        score: fallbackScore,
+        reason:
+            'Trust score is based on visible community feedback until report history is available.',
+      );
+    }
+
+    DateTime? lastReportAt;
+    for (final doc in reports.docs) {
+      final createdAt = _dateTimeField(doc.data(), 'createdAt');
+      if (createdAt != null &&
+          (lastReportAt == null || createdAt.isAfter(lastReportAt))) {
+        lastReportAt = createdAt;
+      }
+    }
+
+    final verifiedCount = reports.docs.length;
+    final activeBonus =
+        lastReportAt != null &&
+            DateTime.now().difference(lastReportAt).inDays <= 30
+        ? 10
+        : 0;
+    final score = (35 +
+            (verifiedCount * 9) +
+            activeBonus +
+            (likeCount * 5) -
+            (disagreeCount * 10))
+        .clamp(0, 100);
+
+    final label = score >= 80
+        ? 'AI Trusted'
+        : score >= 60
+        ? 'Reliable'
+        : score >= 40
+        ? 'New Scout'
+        : 'Needs Proof';
+
+    return ContributorTrustBadge(
+      label: label,
+      score: score,
+      reason:
+          '$verifiedCount verified report${verifiedCount == 1 ? '' : 's'}, $likeCount like${likeCount == 1 ? '' : 's'}, $disagreeCount disagreement${disagreeCount == 1 ? '' : 's'}.',
+    );
+  }
+
+  Future<void> saveReaction(
+    CommunityContribution item,
+    String reaction, {
+    String comment = '',
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || isSavingReaction) return;
+
+    setState(() => isSavingReaction = true);
+    final feedbackId = '${item.id}_${user.uid}';
+    try {
+      await FirebaseFirestore.instance
+          .collection('contributionFeedback')
+          .doc(feedbackId)
+          .set({
+            'reportId': item.id,
+            'userId': user.uid,
+            'userEmail': user.email,
+            'reaction': reaction,
+            'comment': comment.trim(),
+            'updatedAt': Timestamp.now(),
+          }, SetOptions(merge: true));
+
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Feedback failed: $error')));
+    } finally {
+      if (mounted) setState(() => isSavingReaction = false);
+    }
+  }
+
+  Future<void> promptFeedback(CommunityContribution item) async {
+    final controller = TextEditingController();
+    final comment = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Give feedback'),
+          content: TextField(
+            controller: controller,
+            minLines: 3,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: 'Share what looks accurate or needs checking.',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('Submit'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (comment == null || comment.trim().isEmpty) return;
+    await saveReaction(item, 'like', comment: comment);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _psPageColor(context),
+      appBar: const _FullScreenSheetAppBar(title: 'Community'),
+      body: FutureBuilder<List<CommunityContribution>>(
+        future: loadCommunityContributions(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: _psRed));
+          }
+
+          if (snapshot.hasError) {
+            final errorText = snapshot.error.toString();
+            final isPermissionError = errorText.contains('permission-denied');
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Text(
+                  isPermissionError
+                      ? 'Could not load community contributions.\nDeploy the updated Firestore rules, then reopen this page.'
+                      : 'Could not load community contributions.\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: _psMutedTextColor(context)),
+                ),
+              ),
+            );
+          }
+
+          final items = snapshot.data ?? const <CommunityContribution>[];
+          if (items.isEmpty) {
+            return Center(
+              child: Text(
+                'No public verified contributions yet.',
+                style: TextStyle(color: _psMutedTextColor(context)),
+              ),
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            itemCount: items.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (context, index) => _communityCard(items[index]),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _communityCard(CommunityContribution item) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.stationName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _psPrimaryTextColor(context),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'by ${item.contributorName} • ${_formatDateTime(item.createdAt)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _psMutedTextColor(context),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              _trustBadge(item.trustBadge),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _communityPriceChip('Gas', item.gasoline),
+              _communityPriceChip('Diesel', item.diesel),
+              _communityPriceChip('Premium', item.premium),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            item.trustBadge.reason,
+            style: TextStyle(
+              color: _psMutedTextColor(context),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _reactionButton(
+                icon: Icons.thumb_up_alt_outlined,
+                label: '${item.likeCount}',
+                selected: item.myReaction == 'like',
+                onPressed: () => saveReaction(item, 'like'),
+              ),
+              const SizedBox(width: 8),
+              _reactionButton(
+                icon: Icons.report_problem_outlined,
+                label: '${item.disagreeCount}',
+                selected: item.myReaction == 'disagree',
+                onPressed: () => saveReaction(item, 'disagree'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: isSavingReaction ? null : () => promptFeedback(item),
+                icon: const Icon(Icons.chat_bubble_outline, size: 17),
+                label: Text('Feedback ${item.feedbackCount}'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _trustBadge(ContributorTrustBadge badge) {
+    final color = badge.score >= 80
+        ? const Color(0xFF168A4A)
+        : badge.score >= 60
+        ? const Color(0xFF1D70B8)
+        : badge.score >= 40
+        ? const Color(0xFFB54708)
+        : _psRed;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: _psIsDark(context) ? 0.18 : 0.1),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.36)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_awesome, size: 14, color: color),
+          const SizedBox(width: 5),
+          Text(
+            '${badge.label} ${badge.score}',
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _communityPriceChip(String label, double? value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: _psSoftPanelColor(context),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Text(
+        '$label: ${value == null ? '--' : 'PHP ${value.toStringAsFixed(2)}'}',
+        style: TextStyle(
+          color: _psPrimaryTextColor(context),
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _reactionButton({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: isSavingReaction ? null : onPressed,
+      icon: Icon(icon, size: 17),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: selected ? Colors.white : _psPrimaryTextColor(context),
+        backgroundColor: selected ? _psRed : null,
+        side: BorderSide(color: selected ? _psRed : _psBorderColor(context)),
       ),
     );
   }
@@ -2049,7 +2492,15 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
         .where('status', isEqualTo: status)
         .get();
     final reports = snapshot.docs.map(AdminContribution.fromFirestore).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      ..sort((a, b) {
+        if (status == 'pending') {
+          final rankCompare = _screeningRank(
+            a.aiClassification,
+          ).compareTo(_screeningRank(b.aiClassification));
+          if (rankCompare != 0) return rankCompare;
+        }
+        return b.createdAt.compareTo(a.createdAt);
+      });
     return reports.take(50).toList();
   }
 
@@ -2437,6 +2888,8 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
               fontWeight: FontWeight.w900,
             ).copyWith(color: _psPrimaryTextColor(context)),
           ),
+          const SizedBox(height: 8),
+          _aiScreeningBadge(report),
           const SizedBox(height: 6),
           Wrap(
             spacing: 18,
@@ -2456,6 +2909,10 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
                 : 'by unknown user',
             style: TextStyle(color: _psMutedTextColor(context), fontSize: 12),
           ),
+          if (report.aiReasons.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _aiScreeningReasons(report),
+          ],
           if (report.status == 'rejected' &&
               report.rejectionReason?.isNotEmpty == true) ...[
             const SizedBox(height: 10),
@@ -2536,6 +2993,101 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
         ],
       ),
     );
+  }
+
+  Widget _aiScreeningBadge(AdminContribution report) {
+    final label = report.aiClassification ?? 'needs_review';
+    final config = _aiScreeningConfig(label);
+    final confidence = report.aiConfidence;
+    final confidenceText = confidence == null
+        ? ''
+        : ' ${(confidence * 100).round()}%';
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: config.color.withValues(alpha: _psIsDark(context) ? 0.18 : 0.1),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: config.color.withValues(alpha: 0.42)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(config.icon, size: 15, color: config.color),
+            const SizedBox(width: 6),
+            Text(
+              'AI screen: ${config.label}$confidenceText',
+              style: TextStyle(
+                color: config.color,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _aiScreeningReasons(AdminContribution report) {
+    final firstReasons = {...report.aiReasons}.take(3).join(' ');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _psSoftPanelColor(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Text(
+        firstReasons,
+        style: TextStyle(
+          color: _psMutedTextColor(context),
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          height: 1.25,
+        ),
+      ),
+    );
+  }
+
+  _AiScreeningConfig _aiScreeningConfig(String label) {
+    switch (label) {
+      case 'usable':
+        return const _AiScreeningConfig(
+          label: 'Usable',
+          icon: Icons.verified_outlined,
+          color: Color(0xFF168A4A),
+        );
+      case 'spam':
+        return const _AiScreeningConfig(
+          label: 'Likely spam',
+          icon: Icons.report_gmailerrorred_outlined,
+          color: Color(0xFFD92D20),
+        );
+      case 'needs_review':
+      default:
+        return const _AiScreeningConfig(
+          label: 'Needs review',
+          icon: Icons.manage_search_outlined,
+          color: Color(0xFFB54708),
+        );
+    }
+  }
+
+  int _screeningRank(String? label) {
+    switch (label) {
+      case 'spam':
+        return 0;
+      case 'needs_review':
+        return 1;
+      case 'usable':
+        return 2;
+      default:
+        return 1;
+    }
   }
 
   Widget _usersPanel() {
@@ -2655,6 +3207,18 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
       style: TextStyle(color: _psPrimaryTextColor(context), fontSize: 12),
     );
   }
+}
+
+class _AiScreeningConfig {
+  const _AiScreeningConfig({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
 }
 
 class _FullScreenSheetAppBar extends StatelessWidget
