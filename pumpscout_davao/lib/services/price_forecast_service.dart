@@ -51,10 +51,13 @@ FuelPriceForecast? forecastFuelPrice(
 
   if (points.length < 3) return null;
 
-  final cleaned = _removeOutliers(points, regionalStats?.bandFor(fuelType));
+  final band = regionalStats?.bandFor(fuelType);
+  var cleaned = _removeOutliers(points, band);
+  if (cleaned.length < 3 && band != null) {
+    cleaned = _removeOutliers(points, null);
+  }
   if (cleaned.length < 3) return null;
 
-  final band = regionalStats?.bandFor(fuelType);
   final linear = _linearForecast(cleaned);
   if (linear == null) return null;
 
@@ -66,7 +69,8 @@ FuelPriceForecast? forecastFuelPrice(
   final emaWeight = 0.25;
   final priorWeight = 1 - linearWeight - emaWeight;
 
-  final blended = (linear.predictedPrice * linearWeight) +
+  final blended =
+      (linear.predictedPrice * linearWeight) +
       (ema * emaWeight) +
       (prior * priorWeight);
 
@@ -122,9 +126,15 @@ List<_ForecastPoint> _removeOutliers(
 
 _LinearForecastResult? _linearForecast(List<_ForecastPoint> points) {
   final firstDate = points.first.date;
-  final xs = points
-      .map((point) => point.date.difference(firstDate).inHours / 24.0)
-      .toList();
+  final actualDaySpan =
+      points.last.date.difference(firstDate).inMinutes /
+      (Duration.hoursPerDay * Duration.minutesPerHour);
+  final hasUsableTimeSpread = actualDaySpan >= 1;
+  final xs = hasUsableTimeSpread
+      ? points
+            .map((point) => point.date.difference(firstDate).inHours / 24.0)
+            .toList()
+      : List<double>.generate(points.length, (index) => index.toDouble());
   final ys = points.map((point) => point.price).toList();
 
   final xMean = xs.reduce((a, b) => a + b) / xs.length;
@@ -143,7 +153,9 @@ _LinearForecastResult? _linearForecast(List<_ForecastPoint> points) {
   final slope = numerator / denominator;
   final intercept = yMean - (slope * xMean);
   final predictedAt = points.last.date.add(const Duration(days: 7));
-  final predictedX = predictedAt.difference(firstDate).inHours / 24.0;
+  final predictedX = hasUsableTimeSpread
+      ? predictedAt.difference(firstDate).inHours / 24.0
+      : xs.last + 7;
   final predictedPrice = intercept + (slope * predictedX);
 
   return _LinearForecastResult(

@@ -88,21 +88,64 @@ Future<List<PriceReport>> fetchPriceReports(
   StationMarkerDetails details,
 ) async {
   final stationId = details.price?.id;
-  if (stationId == null) return [];
+  final stationKey = _reportKeyForStationDetails(details);
+  final reportsById = <String, PriceReport>{};
 
-  try {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('priceReports')
-        .where('stationId', isEqualTo: stationId)
-        .get();
-    final reports = <PriceReport>[];
-    for (final doc in snapshot.docs) {
+  void addVerifiedReports(
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    for (final doc in docs) {
       final data = doc.data();
       if (_stringField(data, 'status', fallback: 'pending') != 'verified') {
         continue;
       }
-      reports.add(PriceReport.fromFirestore(doc));
+      final report = PriceReport.fromFirestore(doc);
+      reportsById[doc.id] = report;
     }
+  }
+
+  try {
+    if (stationId != null && stationId.isNotEmpty) {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('stationId', isEqualTo: stationId)
+          .get();
+      addVerifiedReports(snapshot.docs);
+    }
+
+    if (stationKey.isNotEmpty) {
+      final keySnapshot = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('stationKey', isEqualTo: stationKey)
+          .get();
+      addVerifiedReports(keySnapshot.docs);
+    }
+
+    if (reportsById.isEmpty) {
+      final nearbySnapshot = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('status', isEqualTo: 'verified')
+          .limit(200)
+          .get();
+
+      final nearbyDocs = nearbySnapshot.docs.where((doc) {
+        final data = doc.data();
+        final lat = _doubleField(data, 'lat');
+        final lng = _doubleField(data, 'lng');
+        if (lat == null || lng == null) return false;
+
+        final distanceMeters = geo.Geolocator.distanceBetween(
+          details.lat,
+          details.lng,
+          lat,
+          lng,
+        );
+        return distanceMeters <= 80;
+      });
+      addVerifiedReports(nearbyDocs);
+    }
+
+    final reports = reportsById.values.toList();
     reports.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     return reports.length > 12 ? reports.sublist(reports.length - 12) : reports;
@@ -110,4 +153,13 @@ Future<List<PriceReport>> fetchPriceReports(
     debugPrint('Price history load failed: $error');
     return [];
   }
+}
+
+String _reportKeyForStationDetails(StationMarkerDetails details) {
+  final priceId = details.price?.id;
+  if (priceId != null && priceId.isNotEmpty) return 'station:$priceId';
+
+  final normalizedName = details.name.trim().toLowerCase();
+  if (normalizedName.isEmpty) return '';
+  return 'live:$normalizedName:${details.lat.toStringAsFixed(5)},${details.lng.toStringAsFixed(5)}';
 }

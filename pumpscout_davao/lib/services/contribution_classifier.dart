@@ -54,13 +54,13 @@ class ContributionClassification {
       },
       confidence: confidence.clamp(0.35, 0.98),
       reasons: reasons.isEmpty
-          ? const ['Gemini completed the automatic screening.']
+          ? const ['Automatic quality screening completed.']
           : reasons,
       breakdown: breakdown,
       modelVersion: _stringField(
         data,
         'modelVersion',
-        fallback: 'gemini-unknown',
+        fallback: 'rules-v1',
       ),
     );
   }

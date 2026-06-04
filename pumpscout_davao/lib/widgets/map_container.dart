@@ -1391,7 +1391,9 @@ class _MapContainerState extends State<MapContainer> {
               ),
             ),
             const SizedBox(height: 10),
-            FutureBuilder<({List<PriceReport> reports, RegionalPriceStats stats})>(
+            FutureBuilder<
+              ({List<PriceReport> reports, RegionalPriceStats stats})
+            >(
               future: () async {
                 final reports = await fetchPriceReports(details);
                 final stats = await RegionalPriceModel.load();
@@ -1415,7 +1417,17 @@ class _MapContainerState extends State<MapContainer> {
                   regionalStats: stats,
                 );
                 if (forecast == null) {
-                  return _forecastEmptyState(details, selectedFuel);
+                  final verifiedFuelReportCount = reports
+                      .where(
+                        (report) =>
+                            _reportFuelPrice(report, selectedFuel) != null,
+                      )
+                      .length;
+                  return _forecastEmptyState(
+                    details,
+                    selectedFuel,
+                    verifiedFuelReportCount,
+                  );
                 }
 
                 return _forecastResultCard(details, forecast);
@@ -1427,7 +1439,18 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
-  Widget _forecastEmptyState(StationMarkerDetails details, String fuelType) {
+  Widget _forecastEmptyState(
+    StationMarkerDetails details,
+    String fuelType,
+    int verifiedFuelReportCount,
+  ) {
+    final remainingReports = math.max(0, 3 - verifiedFuelReportCount);
+    final reportWord = remainingReports == 1 ? 'report' : 'reports';
+    final fuelLabel = _fuelLabelForStation(details, fuelType).toLowerCase();
+    final message = verifiedFuelReportCount < 3
+        ? 'Not enough verified $fuelLabel history yet. Found $verifiedFuelReportCount of 3 verified reports for this fuel at this station. Add $remainingReports more verified $reportWord to generate an ensemble forecast.'
+        : 'Found $verifiedFuelReportCount verified $fuelLabel reports, but they could not produce a reliable forecast yet. Try adding another verified report with a normal pump price, or check whether older test reports used unusual values.';
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -1436,7 +1459,7 @@ class _MapContainerState extends State<MapContainer> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        'Not enough verified ${_fuelLabelForStation(details, fuelType).toLowerCase()} history yet. Add at least 3 verified reports for this station to generate an ensemble forecast.',
+        message,
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
@@ -1456,7 +1479,15 @@ class _MapContainerState extends State<MapContainer> {
         : const Color(0xFFFFA000);
     final changeText = change.abs() < 0.25
         ? 'stable'
-        : '${change > 0 ? '+' : '-'}PHP ${change.abs().toStringAsFixed(2)}';
+        : '${change > 0 ? '+' : ''}PHP ${change.abs().toStringAsFixed(2)}';
+    final history = forecast.history;
+    final previousPrice = history.length >= 2
+        ? history[history.length - 2]
+        : null;
+    final latestPrice = forecast.currentPrice;
+    final previousChange = previousPrice == null
+        ? null
+        : latestPrice - previousPrice;
 
     return Container(
       width: double.infinity,
@@ -1517,25 +1548,111 @@ class _MapContainerState extends State<MapContainer> {
             ),
           ),
           const SizedBox(height: 8),
+          _forecastHistorySummary(
+            previousPrice: previousPrice,
+            latestPrice: latestPrice,
+            previousChange: previousChange,
+            color: previousChange == null
+                ? Theme.of(context).colorScheme.onSurfaceVariant
+                : previousChange > 0
+                ? const Color(0xFFE94B5A)
+                : previousChange < 0
+                ? const Color(0xFF1E8E3E)
+                : const Color(0xFFFFA000),
+          ),
+          const SizedBox(height: 8),
           Text(
-            '${forecast.methodLabel} The price may ${forecast.direction} by $changeText from the latest verified report.',
+            'Based on verified price history, the price may ${forecast.direction} by $changeText next week.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Model: ${forecast.modelVersion}',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
         ],
       ),
+    );
+  }
+
+  Widget _forecastHistorySummary({
+    required double? previousPrice,
+    required double latestPrice,
+    required double? previousChange,
+    required Color color,
+  }) {
+    final previousText = previousPrice == null
+        ? 'No previous report'
+        : 'PHP ${previousPrice.toStringAsFixed(2)}';
+    final latestText = 'PHP ${latestPrice.toStringAsFixed(2)}';
+    final changeText = previousChange == null
+        ? '--'
+        : previousChange.abs() < 0.01
+        ? 'No change'
+        : '${previousChange > 0 ? '+' : '-'}PHP ${previousChange.abs().toStringAsFixed(2)}';
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _forecastHistoryValue(
+                label: 'Previous verified',
+                value: previousText,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _forecastHistoryValue(
+                label: 'Latest verified',
+                value: latestText,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text(
+              'Change from previous',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              changeText,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _forecastHistoryValue({required String label, required String value}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+        ),
+      ],
     );
   }
 
@@ -1768,7 +1885,7 @@ class _MapContainerState extends State<MapContainer> {
       }
 
       final photoUploadFailed = image != null && photoUrl == null;
-      final fallbackClassification = classifyPriceContribution(
+      final classification = classifyPriceContribution(
         station: details,
         gasoline: gasoline,
         diesel: diesel,
@@ -1776,18 +1893,6 @@ class _MapContainerState extends State<MapContainer> {
         hasPhoto: photoUrl != null,
         photoUploadFailed: photoUploadFailed,
       );
-      final classification =
-          await screenContributionWithGemini(
-            station: details,
-            gasoline: gasoline,
-            diesel: diesel,
-            premium: premium,
-            hasPhoto: photoUrl != null,
-            photoUploadFailed: photoUploadFailed,
-            photoUrl: photoUrl,
-            user: user,
-          ) ??
-          fallbackClassification;
 
       final reportData = <String, Object?>{
         'stationId': stationRef.id,
@@ -2898,7 +3003,7 @@ class _MapContainerState extends State<MapContainer> {
         MapWidget(
           key: ValueKey("mapWidget-$mapStyleUri"),
           styleUri: mapStyleUri,
-          cameraOptions: CameraOptions(
+          viewport: CameraViewportState(
             center: Point(coordinates: Position(125.6128, 7.0731)),
             zoom: 16,
             pitch: 55,
