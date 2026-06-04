@@ -95,10 +95,17 @@ Future<List<PriceReport>> fetchPriceReports(
         .collection('priceReports')
         .where('stationId', isEqualTo: stationId)
         .get();
-    final reports = snapshot.docs.map(PriceReport.fromFirestore).toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final reports = <PriceReport>[];
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      if (_stringField(data, 'status', fallback: 'pending') != 'verified') {
+        continue;
+      }
+      reports.add(PriceReport.fromFirestore(doc));
+    }
+    reports.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    return reports.length > 8 ? reports.sublist(reports.length - 8) : reports;
+    return reports.length > 12 ? reports.sublist(reports.length - 12) : reports;
   } catch (error) {
     debugPrint('Price history load failed: $error');
     return [];

@@ -1391,8 +1391,12 @@ class _MapContainerState extends State<MapContainer> {
               ),
             ),
             const SizedBox(height: 10),
-            FutureBuilder<List<PriceReport>>(
-              future: fetchPriceReports(details),
+            FutureBuilder<({List<PriceReport> reports, RegionalPriceStats stats})>(
+              future: () async {
+                final reports = await fetchPriceReports(details);
+                final stats = await RegionalPriceModel.load();
+                return (reports: reports, stats: stats);
+              }(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const SizedBox(
@@ -1403,8 +1407,13 @@ class _MapContainerState extends State<MapContainer> {
                   );
                 }
 
-                final reports = snapshot.data ?? const <PriceReport>[];
-                final forecast = forecastFuelPrice(reports, selectedFuel);
+                final reports = snapshot.data?.reports ?? const <PriceReport>[];
+                final stats = snapshot.data?.stats;
+                final forecast = forecastFuelPrice(
+                  reports,
+                  selectedFuel,
+                  regionalStats: stats,
+                );
                 if (forecast == null) {
                   return _forecastEmptyState(details, selectedFuel);
                 }
@@ -1427,7 +1436,7 @@ class _MapContainerState extends State<MapContainer> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        'Not enough verified ${_fuelLabelForStation(details, fuelType).toLowerCase()} history yet. Add at least 3 verified reports to show a prediction.',
+        'Not enough verified ${_fuelLabelForStation(details, fuelType).toLowerCase()} history yet. Add at least 3 verified reports for this station to generate an ensemble forecast.',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
@@ -1473,13 +1482,26 @@ class _MapContainerState extends State<MapContainer> {
                   ),
                 ),
               ),
-              Text(
-                'PHP ${forecast.predictedPrice.toStringAsFixed(2)}',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'PHP ${forecast.predictedPrice.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    '${forecast.confidencePercent}% confidence',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1496,10 +1518,19 @@ class _MapContainerState extends State<MapContainer> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Linear regression estimates the price may ${forecast.direction} by $changeText from the latest verified report.',
+            '${forecast.methodLabel} The price may ${forecast.direction} by $changeText from the latest verified report.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Model: ${forecast.modelVersion}',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
           ),
