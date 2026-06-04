@@ -29,15 +29,16 @@ FuelPriceForecast? forecastFuelPrice(
   List<PriceReport> reports,
   String fuelType,
 ) {
-  final points = reports
-      .map((report) {
-        final value = _reportFuelPrice(report, fuelType);
-        if (value == null) return null;
-        return _ForecastPoint(report.createdAt, value);
-      })
-      .whereType<_ForecastPoint>()
-      .toList()
-    ..sort((a, b) => a.date.compareTo(b.date));
+  final points =
+      reports
+          .map((report) {
+            final value = _reportFuelPrice(report, fuelType);
+            if (value == null) return null;
+            return _ForecastPoint(report.createdAt, value);
+          })
+          .whereType<_ForecastPoint>()
+          .toList()
+        ..sort((a, b) => a.date.compareTo(b.date));
 
   if (points.length < 3) return null;
 

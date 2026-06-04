@@ -5,11 +5,15 @@ class ContributionClassification {
     required this.label,
     required this.confidence,
     required this.reasons,
+    this.breakdown = const <String, num>{},
+    this.modelVersion = 'rules-v1',
   });
 
   final String label;
   final double confidence;
   final List<String> reasons;
+  final Map<String, num> breakdown;
+  final String modelVersion;
 
   bool get needsAdminAttention => label != 'usable';
 
@@ -19,9 +23,46 @@ class ContributionClassification {
       'aiConfidence': confidence,
       'aiReasons': reasons,
       'aiScreenedAt': Timestamp.now(),
-      'aiModelVersion': 'rules-v1',
+      'aiBreakdown': breakdown,
+      'aiModelVersion': modelVersion,
       'needsAdminAttention': needsAdminAttention,
     };
+  }
+
+  factory ContributionClassification.fromCallableResult(
+    Map<String, dynamic> data,
+  ) {
+    final label = _stringField(data, 'label', fallback: 'needs_review');
+    final confidence = _doubleField(data, 'confidence') ?? 0.55;
+    final reasons = _stringListField(data, 'reasons');
+    final rawBreakdown = data['breakdown'];
+    final breakdown = <String, num>{};
+
+    if (rawBreakdown is Map) {
+      for (final entry in rawBreakdown.entries) {
+        final value = entry.value;
+        if (value is num) {
+          breakdown['${entry.key}'] = value;
+        }
+      }
+    }
+
+    return ContributionClassification(
+      label: switch (label) {
+        'usable' || 'needs_review' || 'spam' => label,
+        _ => 'needs_review',
+      },
+      confidence: confidence.clamp(0.35, 0.98),
+      reasons: reasons.isEmpty
+          ? const ['Gemini completed the automatic screening.']
+          : reasons,
+      breakdown: breakdown,
+      modelVersion: _stringField(
+        data,
+        'modelVersion',
+        fallback: 'gemini-unknown',
+      ),
+    );
   }
 }
 
@@ -36,11 +77,7 @@ ContributionClassification classifyPriceContribution({
   final reasons = <String>[];
   var riskScore = 0;
 
-  final prices = <double>[
-    ?gasoline,
-    ?diesel,
-    ?premium,
-  ];
+  final prices = <double>[?gasoline, ?diesel, ?premium];
 
   if (prices.isEmpty) {
     riskScore += 45;

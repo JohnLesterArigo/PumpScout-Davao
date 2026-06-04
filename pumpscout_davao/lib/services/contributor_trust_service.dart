@@ -25,6 +25,9 @@ Future<Map<String, ReportFeedbackAggregate>> loadFeedbackAggregatesByReportId({
   String? currentUserId,
 }) async {
   final aggregates = <String, ReportFeedbackAggregate>{};
+  final reactionsByReportId = <String, Map<String, String>>{};
+  final commentsByReportId = <String, List<CommunityFeedbackComment>>{};
+  final repliesByParentId = <String, List<CommunityFeedbackReply>>{};
 
   final snapshot = await FirebaseFirestore.instance
       .collection('contributionFeedback')
@@ -35,54 +38,130 @@ Future<Map<String, ReportFeedbackAggregate>> loadFeedbackAggregatesByReportId({
     final reportId = _stringField(data, 'reportId');
     if (reportId.isEmpty) continue;
 
+    final type = _stringField(data, 'type');
     final reaction = _stringField(data, 'reaction');
     final comment = _stringField(data, 'comment');
     final existing = aggregates[reportId] ?? const ReportFeedbackAggregate();
-
-    var likeCount = existing.likeCount;
-    var disagreeCount = existing.disagreeCount;
-    var substantiveFeedbackCount = existing.substantiveFeedbackCount;
-    var myReaction = existing.myReaction;
-    final publicComments = List<CommunityFeedbackComment>.from(
-      existing.publicComments,
-      growable: true,
-    );
-
-    if (reaction == 'like') likeCount += 1;
-    if (reaction == 'disagree') disagreeCount += 1;
-    if (comment.trim().length >= 8) substantiveFeedbackCount += 1;
+    final isLegacyDoc = type.isEmpty;
+    final isReactionDoc = type == 'reaction' || isLegacyDoc;
+    final isCommentDoc =
+        type == 'comment' || (isLegacyDoc && comment.trim().isNotEmpty);
+    final isReplyDoc = type == 'reply';
 
     final userId = _stringField(data, 'userId');
-    if (currentUserId != null && userId == currentUserId && reaction.isNotEmpty) {
-      myReaction = reaction;
+    if (isReactionDoc &&
+        userId.isNotEmpty &&
+        (reaction == 'like' || reaction == 'disagree')) {
+      final reactions = reactionsByReportId.putIfAbsent(
+        reportId,
+        () => <String, String>{},
+      );
+      if (type == 'reaction' || !reactions.containsKey(userId)) {
+        reactions[userId] = reaction;
+      }
     }
 
     final authorName = _feedbackAuthorName(data);
-    if (comment.trim().isNotEmpty) {
-      publicComments.add(
+    if (isCommentDoc) {
+      commentsByReportId.putIfAbsent(
+        reportId,
+        () => <CommunityFeedbackComment>[],
+      );
+      commentsByReportId[reportId]!.add(
         CommunityFeedbackComment(
+          id: doc.id,
           authorName: authorName,
           comment: comment.trim(),
           reaction: reaction,
-          createdAt: _dateTimeField(data, 'updatedAt') ??
+          replies: _feedbackReplies(data),
+          createdAt:
+              _dateTimeField(data, 'updatedAt') ??
               _dateTimeField(data, 'createdAt'),
         ),
       );
     }
 
-    publicComments.sort((a, b) {
-      final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      return bDate.compareTo(aDate);
-    });
+    if (isReplyDoc && comment.trim().isNotEmpty) {
+      final parentCommentId = _stringField(data, 'parentCommentId');
+      if (parentCommentId.isNotEmpty) {
+        repliesByParentId.putIfAbsent(
+          parentCommentId,
+          () => <CommunityFeedbackReply>[],
+        );
+        repliesByParentId[parentCommentId]!.add(
+          CommunityFeedbackReply(
+            authorName: authorName,
+            comment: comment.trim(),
+            createdAt:
+                _dateTimeField(data, 'updatedAt') ??
+                _dateTimeField(data, 'createdAt'),
+          ),
+        );
+      }
+    }
 
     aggregates[reportId] = ReportFeedbackAggregate(
+      publicComments: existing.publicComments,
+    );
+  }
+
+  for (final entry in reactionsByReportId.entries) {
+    final reactions = entry.value;
+    final likeCount = reactions.values
+        .where((reaction) => reaction == 'like')
+        .length;
+    final disagreeCount = reactions.values
+        .where((reaction) => reaction == 'disagree')
+        .length;
+    final existing = aggregates[entry.key] ?? const ReportFeedbackAggregate();
+    aggregates[entry.key] = ReportFeedbackAggregate(
       likeCount: likeCount,
       disagreeCount: disagreeCount,
-      feedbackCount: existing.feedbackCount + 1,
-      substantiveFeedbackCount: substantiveFeedbackCount,
-      myReaction: myReaction,
-      publicComments: publicComments,
+      feedbackCount: existing.feedbackCount,
+      substantiveFeedbackCount: existing.substantiveFeedbackCount,
+      myReaction: currentUserId == null ? null : reactions[currentUserId],
+      publicComments: existing.publicComments,
+    );
+  }
+
+  for (final entry in commentsByReportId.entries) {
+    final comments =
+        entry.value.map((comment) {
+          final replies =
+              [...comment.replies, ...?repliesByParentId[comment.id]]
+                ..sort((a, b) {
+                  final aDate =
+                      a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  final bDate =
+                      b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  return aDate.compareTo(bDate);
+                });
+
+          return CommunityFeedbackComment(
+            id: comment.id,
+            authorName: comment.authorName,
+            comment: comment.comment,
+            reaction: comment.reaction,
+            replies: replies,
+            createdAt: comment.createdAt,
+          );
+        }).toList()..sort((a, b) {
+          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+
+    final existing = aggregates[entry.key] ?? const ReportFeedbackAggregate();
+    aggregates[entry.key] = ReportFeedbackAggregate(
+      likeCount: existing.likeCount,
+      disagreeCount: existing.disagreeCount,
+      feedbackCount: comments.fold<int>(
+        0,
+        (total, comment) => total + 1 + comment.replies.length,
+      ),
+      substantiveFeedbackCount: comments.length,
+      myReaction: existing.myReaction,
+      publicComments: comments,
     );
   }
 
@@ -101,6 +180,35 @@ String _feedbackAuthorName(Map<String, dynamic> data) {
   return 'Community member';
 }
 
+List<CommunityFeedbackReply> _feedbackReplies(Map<String, dynamic> data) {
+  final rawReplies = data['replies'];
+  if (rawReplies is! List) return const <CommunityFeedbackReply>[];
+
+  final replies = <CommunityFeedbackReply>[];
+  for (final item in rawReplies) {
+    if (item is! Map) continue;
+    final reply = Map<String, dynamic>.from(item);
+    final comment = _stringField(reply, 'comment');
+    if (comment.trim().isEmpty) continue;
+
+    replies.add(
+      CommunityFeedbackReply(
+        authorName: _feedbackAuthorName(reply),
+        comment: comment.trim(),
+        createdAt: _dateTimeField(reply, 'createdAt'),
+      ),
+    );
+  }
+
+  replies.sort((a, b) {
+    final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return aDate.compareTo(bDate);
+  });
+
+  return replies;
+}
+
 ContributorTrustBadge computeContributorTrustBadge({
   required int verifiedReportCount,
   DateTime? lastVerifiedReportAt,
@@ -109,42 +217,8 @@ ContributorTrustBadge computeContributorTrustBadge({
   required int substantiveFeedbackCount,
   List<String> aiClassifications = const <String>[],
 }) {
-  final activeBonus =
-      lastVerifiedReportAt != null &&
-          DateTime.now().difference(lastVerifiedReportAt).inDays <= 30
-      ? 10
-      : 0;
-
-  var aiAdjustment = 0;
-  for (final label in aiClassifications) {
-    switch (label.toLowerCase()) {
-      case 'usable':
-        aiAdjustment += 3;
-      case 'needs_review':
-        aiAdjustment -= 5;
-      case 'spam':
-        aiAdjustment -= 18;
-      default:
-        aiAdjustment -= 2;
-    }
-  }
-
-  final score = (35 +
-          (verifiedReportCount * 9) +
-          activeBonus +
-          (communityLikeCount * 5) +
-          (substantiveFeedbackCount * 3) +
-          aiAdjustment -
-          (communityDisagreeCount * 10))
-      .clamp(0, 100);
-
-  final label = score >= 80
-      ? 'AI Trusted'
-      : score >= 60
-      ? 'Reliable'
-      : score >= 40
-      ? 'New Scout'
-      : 'Needs Proof';
+  final score = (verifiedReportCount * 10).clamp(0, 100);
+  final label = 'Trust score';
 
   final reason = buildContributorTrustReason(
     verifiedReportCount: verifiedReportCount,
@@ -164,21 +238,13 @@ String buildContributorTrustReason({
   required int substantiveFeedbackCount,
   List<String> aiClassifications = const <String>[],
 }) {
-  final usableCount = aiClassifications
-      .where((label) => label.toLowerCase() == 'usable')
-      .length;
-  final reviewCount = aiClassifications
-      .where((label) => label.toLowerCase() == 'needs_review')
-      .length;
-  final spamCount = aiClassifications
-      .where((label) => label.toLowerCase() == 'spam')
-      .length;
+  final nextMilestone = verifiedReportCount >= 10
+      ? 'Maximum trust score reached.'
+      : '${10 - verifiedReportCount} more approved contribution${10 - verifiedReportCount == 1 ? '' : 's'} to reach 100%.';
 
-  return '$verifiedReportCount approved contribution${verifiedReportCount == 1 ? '' : 's'}, '
-      '$communityLikeCount agree${communityLikeCount == 1 ? '' : 's'}, '
-      '$communityDisagreeCount disagree${communityDisagreeCount == 1 ? '' : 's'}, '
-      '$substantiveFeedbackCount detailed feedback note${substantiveFeedbackCount == 1 ? '' : 's'}. '
-      'AI checks: $usableCount clean, $reviewCount needs review, $spamCount flagged.';
+  return '$verifiedReportCount admin-approved contribution${verifiedReportCount == 1 ? '' : 's'}. '
+      'Trust increases after an admin verifies a submitted fuel price. '
+      '$nextMilestone';
 }
 
 Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
@@ -187,8 +253,8 @@ Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
 }) async {
   if (contributorId.isEmpty) {
     return const ContributorTrustBadge(
-      label: 'Unrated',
-      score: 35,
+      label: 'Trust score',
+      score: 0,
       reason: 'Contributor identity is incomplete.',
     );
   }
@@ -203,10 +269,10 @@ Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
   } catch (error) {
     debugPrint('Contributor trust query failed: $error');
     return const ContributorTrustBadge(
-      label: 'New Scout',
-      score: 40,
+      label: 'Trust score',
+      score: 0,
       reason:
-          'Trust score will update after more approved contributions are visible.',
+          'Trust score will update after admin-approved contributions are visible.',
     );
   }
 
@@ -220,7 +286,8 @@ Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
     final data = doc.data();
     final createdAt = _dateTimeField(data, 'createdAt');
     if (createdAt != null &&
-        (lastVerifiedReportAt == null || createdAt.isAfter(lastVerifiedReportAt))) {
+        (lastVerifiedReportAt == null ||
+            createdAt.isAfter(lastVerifiedReportAt))) {
       lastVerifiedReportAt = createdAt;
     }
 

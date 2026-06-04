@@ -24,18 +24,19 @@ Future<CloudinaryUploadResult?> uploadPriceReportImageToCloudinary({
   }
 
   try {
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.https(
-        'api.cloudinary.com',
-        '/v1_1/$cloudinaryCloudName/image/upload',
-      ),
-    )
-      ..fields['upload_preset'] = cloudinaryUploadPreset
-      ..fields['folder'] = 'pumpscout/price_reports/$stationId'
-      ..fields['public_id'] = createdAt.millisecondsSinceEpoch.toString()
-      ..fields['tags'] = 'pumpscout,price_report'
-      ..files.add(await http.MultipartFile.fromPath('file', image.path));
+    final request =
+        http.MultipartRequest(
+            'POST',
+            Uri.https(
+              'api.cloudinary.com',
+              '/v1_1/$cloudinaryCloudName/image/upload',
+            ),
+          )
+          ..fields['upload_preset'] = cloudinaryUploadPreset
+          ..fields['folder'] = 'pumpscout/price_reports/$stationId'
+          ..fields['public_id'] = createdAt.millisecondsSinceEpoch.toString()
+          ..fields['tags'] = 'pumpscout,price_report'
+          ..files.add(await http.MultipartFile.fromPath('file', image.path));
 
     final streamed = await request.send().timeout(const Duration(seconds: 30));
     final response = await http.Response.fromStream(streamed);

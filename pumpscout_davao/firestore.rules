@@ -28,8 +28,29 @@ service cloud.firestore {
       return request.resource.data.userId == request.auth.uid
         && request.resource.data.reportId is string
         && request.resource.data.reportId.size() > 0
-        && request.resource.data.reaction in ["like", "disagree"]
+        && request.resource.data.type in ["reaction", "comment", "reply"]
+        && request.resource.data.reaction is string
         && request.resource.data.comment is string
+        && (
+          (
+            request.resource.data.type == "reaction"
+            && request.resource.data.reaction in ["like", "disagree"]
+            && request.resource.data.comment == ""
+          )
+          || (
+            request.resource.data.type == "comment"
+            && request.resource.data.reaction == ""
+            && request.resource.data.comment.size() > 0
+            && !("parentCommentId" in request.resource.data)
+          )
+          || (
+            request.resource.data.type == "reply"
+            && request.resource.data.reaction == ""
+            && request.resource.data.comment.size() > 0
+            && request.resource.data.parentCommentId is string
+            && request.resource.data.parentCommentId.size() > 0
+          )
+        )
         && (!("userDisplayName" in request.resource.data)
           || request.resource.data.userDisplayName is string)
         && (!("userEmail" in request.resource.data)
@@ -112,6 +133,7 @@ service cloud.firestore {
       allow update: if signedIn()
         && isOwnFeedbackDoc()
         && validFeedbackWrite()
+        && request.resource.data.type == "reaction"
         && request.resource.data.reportId == resource.data.reportId;
 
       allow delete: if isOwnFeedbackDoc() || isAdmin();

@@ -299,18 +299,34 @@ class UserContribution {
 
 class CommunityFeedbackComment {
   const CommunityFeedbackComment({
+    required this.id,
     required this.authorName,
     required this.comment,
     required this.reaction,
+    this.replies = const <CommunityFeedbackReply>[],
+    this.createdAt,
+  });
+
+  final String id;
+  final String authorName;
+  final String comment;
+  final String reaction;
+  final List<CommunityFeedbackReply> replies;
+  final DateTime? createdAt;
+
+  bool get hasVisibleComment => comment.trim().isNotEmpty;
+}
+
+class CommunityFeedbackReply {
+  const CommunityFeedbackReply({
+    required this.authorName,
+    required this.comment,
     this.createdAt,
   });
 
   final String authorName;
   final String comment;
-  final String reaction;
   final DateTime? createdAt;
-
-  bool get hasVisibleComment => comment.trim().isNotEmpty;
 }
 
 class CommunityContribution {
@@ -355,6 +371,15 @@ class CommunityContribution {
   List<CommunityFeedbackComment> get publicComments =>
       _publicComments ?? const <CommunityFeedbackComment>[];
 
+  int get commentThreadCount {
+    return publicComments.fold<int>(
+      0,
+      (total, comment) => total + 1 + comment.replies.length,
+    );
+  }
+
+  int get visibleLikeCount => math.max(0, likeCount - disagreeCount);
+
   String get contributorName {
     if (userDisplayName?.trim().isNotEmpty == true) {
       return userDisplayName!.trim();
@@ -370,7 +395,8 @@ class CommunityContribution {
     required int disagreeCount,
     required int feedbackCount,
     required String? myReaction,
-    List<CommunityFeedbackComment> publicComments = const <CommunityFeedbackComment>[],
+    List<CommunityFeedbackComment> publicComments =
+        const <CommunityFeedbackComment>[],
   }) {
     final data = doc.data();
     return CommunityContribution(
@@ -391,6 +417,34 @@ class CommunityContribution {
       myReaction: myReaction,
       publicComments: publicComments,
       trustBadge: trustBadge,
+    );
+  }
+
+  CommunityContribution copyWith({
+    int? likeCount,
+    int? disagreeCount,
+    int? feedbackCount,
+    String? myReaction,
+    List<CommunityFeedbackComment>? publicComments,
+  }) {
+    return CommunityContribution(
+      id: id,
+      stationName: stationName,
+      brand: brand,
+      createdAt: createdAt,
+      trustBadge: trustBadge,
+      gasoline: gasoline,
+      diesel: diesel,
+      premium: premium,
+      photoUrl: photoUrl,
+      userId: userId,
+      userDisplayName: userDisplayName,
+      userEmail: userEmail,
+      likeCount: likeCount ?? this.likeCount,
+      disagreeCount: disagreeCount ?? this.disagreeCount,
+      feedbackCount: feedbackCount ?? this.feedbackCount,
+      myReaction: myReaction,
+      publicComments: publicComments ?? this.publicComments,
     );
   }
 }

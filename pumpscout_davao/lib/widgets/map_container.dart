@@ -1358,16 +1358,25 @@ class _MapContainerState extends State<MapContainer> {
           children: [
             Text(
               'Price Forecast',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'gasoline', label: Text('Gas')),
-                ButtonSegment(value: 'diesel', label: Text('Diesel')),
-                ButtonSegment(value: 'premium', label: Text('Premium')),
+              segments: [
+                ButtonSegment(
+                  value: 'gasoline',
+                  label: Text(_shortFuelLabelForStation(details, 'gasoline')),
+                ),
+                ButtonSegment(
+                  value: 'diesel',
+                  label: Text(_shortFuelLabelForStation(details, 'diesel')),
+                ),
+                ButtonSegment(
+                  value: 'premium',
+                  label: Text(_shortFuelLabelForStation(details, 'premium')),
+                ),
               ],
               selected: {selectedFuel},
               onSelectionChanged: (selection) {
@@ -1397,7 +1406,7 @@ class _MapContainerState extends State<MapContainer> {
                 final reports = snapshot.data ?? const <PriceReport>[];
                 final forecast = forecastFuelPrice(reports, selectedFuel);
                 if (forecast == null) {
-                  return _forecastEmptyState(selectedFuel);
+                  return _forecastEmptyState(details, selectedFuel);
                 }
 
                 return _forecastResultCard(details, forecast);
@@ -1409,7 +1418,7 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
-  Widget _forecastEmptyState(String fuelType) {
+  Widget _forecastEmptyState(StationMarkerDetails details, String fuelType) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -1418,7 +1427,7 @@ class _MapContainerState extends State<MapContainer> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        'Not enough verified ${_fuelLabel(fuelType).toLowerCase()} history yet. Add at least 3 verified reports to show a prediction.',
+        'Not enough verified ${_fuelLabelForStation(details, fuelType).toLowerCase()} history yet. Add at least 3 verified reports to show a prediction.',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
@@ -1536,6 +1545,8 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   void showPriceReportSheet(StationMarkerDetails details) {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
     final gasolineController = TextEditingController(
       text: details.price?.gasoline?.toStringAsFixed(2) ?? '',
     );
@@ -1636,8 +1647,10 @@ class _MapContainerState extends State<MapContainer> {
                                   image: selectedImage,
                                 );
                                 if (!mounted) return;
-                                Navigator.of(this.context).pop();
-                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                if (navigator.canPop()) {
+                                  navigator.pop();
+                                }
+                                messenger.showSnackBar(
                                   SnackBar(
                                     content: Text(
                                       success
@@ -1724,7 +1737,7 @@ class _MapContainerState extends State<MapContainer> {
       }
 
       final photoUploadFailed = image != null && photoUrl == null;
-      final classification = classifyPriceContribution(
+      final fallbackClassification = classifyPriceContribution(
         station: details,
         gasoline: gasoline,
         diesel: diesel,
@@ -1732,6 +1745,18 @@ class _MapContainerState extends State<MapContainer> {
         hasPhoto: photoUrl != null,
         photoUploadFailed: photoUploadFailed,
       );
+      final classification =
+          await screenContributionWithGemini(
+            station: details,
+            gasoline: gasoline,
+            diesel: diesel,
+            premium: premium,
+            hasPhoto: photoUrl != null,
+            photoUploadFailed: photoUploadFailed,
+            photoUrl: photoUrl,
+            user: user,
+          ) ??
+          fallbackClassification;
 
       final reportData = <String, Object?>{
         'stationId': stationRef.id,
@@ -2650,8 +2675,8 @@ class _MapContainerState extends State<MapContainer> {
   String _fuelLabel(String fuelType) {
     return switch (fuelType) {
       'diesel' => 'Diesel',
-      'premium' => 'Premium Gasoline',
-      _ => 'Gasoline',
+      'premium' => 'Premium',
+      _ => 'Regular',
     };
   }
 
@@ -2687,14 +2712,14 @@ class _MapContainerState extends State<MapContainer> {
     if (brand.contains('shell')) {
       return switch (fuelType) {
         'diesel' => 'Shell FuelSave Diesel',
-        'premium' => 'Shell V-Power Gasoline',
+        'premium' => 'Shell VP Gasoline',
         _ => 'Shell FuelSave Gasoline',
       };
     }
 
     if (brand.contains('petron')) {
       return switch (fuelType) {
-        'diesel' => 'Petron Diesel Max',
+        'diesel' => 'Petron Max Diesel',
         'premium' => 'Petron XCS',
         _ => 'Petron Xtra Advance',
       };
@@ -2716,6 +2741,23 @@ class _MapContainerState extends State<MapContainer> {
       };
     }
 
+    if (brand.contains('blue energy')) {
+      return switch (fuelType) {
+        'diesel' => 'Blue Energy Diesel',
+        'premium' => 'Blue Energy Premium',
+        _ => 'Blue Energy Regular',
+      };
+    }
+
+    if (brand.contains('philfumes') || brand.contains('philfuels')) {
+      final brandName = brand.contains('philfuels') ? 'Philfuels' : 'Philfumes';
+      return switch (fuelType) {
+        'diesel' => '$brandName Diesel',
+        'premium' => '$brandName Premium',
+        _ => '$brandName Regular',
+      };
+    }
+
     if (brand.contains('seaoil') || brand.contains('sea oil')) {
       return switch (fuelType) {
         'diesel' => 'SEAOIL Exceed Diesel',
@@ -2724,11 +2766,19 @@ class _MapContainerState extends State<MapContainer> {
       };
     }
 
+    if (brand.contains('jetti')) {
+      return switch (fuelType) {
+        'diesel' => 'Jetti Diesel Master',
+        'premium' => 'Jetti JX Premium',
+        _ => 'Jetti Accelerate',
+      };
+    }
+
     if (brand.contains('phoenix')) {
       return switch (fuelType) {
         'diesel' => 'Phoenix Diesel',
-        'premium' => 'Phoenix Premium 98',
-        _ => 'Phoenix Gasoline 95',
+        'premium' => 'Phoenix Premium 95',
+        _ => 'Phoenix Super',
       };
     }
 
@@ -2766,7 +2816,11 @@ class _MapContainerState extends State<MapContainer> {
     if (brand.contains('petron')) return 'Petron';
     if (brand.contains('unioil')) return 'Unioil';
     if (brand.contains('caltex')) return 'Caltex';
+    if (brand.contains('blue energy')) return 'Blue Energy';
+    if (brand.contains('philfumes')) return 'Philfumes';
+    if (brand.contains('philfuels')) return 'Philfuels';
     if (brand.contains('seaoil') || brand.contains('sea oil')) return 'Seaoil';
+    if (brand.contains('jetti')) return 'Jetti';
     if (brand.contains('phoenix')) return 'Phoenix';
     if (brand.contains('total')) return 'Total';
     return '';

@@ -10,10 +10,7 @@ class PriceTrendPainter extends CustomPainter {
   void paint(Canvas canvas, ui.Size size) {
     if (values.length < 2) return;
 
-    final allValues = [
-      ...values,
-      ?predictedValue,
-    ];
+    final allValues = [...values, ?predictedValue];
     final minValue = allValues.reduce(math.min);
     final maxValue = allValues.reduce(math.max);
     final range = (maxValue - minValue).abs() < 0.01 ? 1 : maxValue - minValue;
@@ -66,7 +63,8 @@ class PriceTrendPainter extends CustomPainter {
     if (forecast != null) {
       final lastY =
           size.height - ((values.last - minValue) / range * size.height);
-      final forecastY = size.height - ((forecast - minValue) / range * size.height);
+      final forecastY =
+          size.height - ((forecast - minValue) / range * size.height);
       final start = Offset(size.width * 0.86, lastY);
       final end = Offset(size.width, forecastY);
       _drawDashedLine(canvas, start, end, forecastPaint);
@@ -91,7 +89,8 @@ class PriceTrendPainter extends CustomPainter {
 
     while (drawn < distance) {
       final segmentStart = start + direction * drawn;
-      final segmentEnd = start + direction * math.min(drawn + dashWidth, distance);
+      final segmentEnd =
+          start + direction * math.min(drawn + dashWidth, distance);
       canvas.drawLine(segmentStart, segmentEnd, paint);
       drawn += dashWidth + dashSpace;
     }
