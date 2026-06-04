@@ -1,27 +1,27 @@
-﻿{
-    "region":  "Davao City",
-    "source":  "Real_Data_fuelprice_june22026.csv",
-    "updatedAt":  "2026-06-04",
-    "modelVersion":  "regional-prior-v1",
-    "gasoline":  {
-                     "min":  72.1,
-                     "max":  82.7,
-                     "median":  76.9,
-                     "mean":  77.58,
-                     "count":  21
-                 },
-    "diesel":  {
-                   "min":  69.8,
-                   "max":  83.3,
-                   "median":  74.6,
-                   "mean":  76.39,
-                   "count":  29
-               },
-    "premium":  {
-                    "min":  72.74,
-                    "max":  100,
-                    "median":  77.55,
-                    "mean":  79.75,
-                    "count":  28
-                }
+{
+  "region": "Davao City",
+  "source": "Real_Data_fuelprice_june22026.csv",
+  "updatedAt": "2026-06-04",
+  "modelVersion": "regional-prior-v1",
+  "gasoline": {
+    "min": 72.1,
+    "max": 82.7,
+    "median": 76.9,
+    "mean": 77.58,
+    "count": 21
+  },
+  "diesel": {
+    "min": 69.8,
+    "max": 83.3,
+    "median": 74.6,
+    "mean": 76.39,
+    "count": 29
+  },
+  "premium": {
+    "min": 72.74,
+    "max": 100.0,
+    "median": 77.55,
+    "mean": 79.75,
+    "count": 28
+  }
 }
