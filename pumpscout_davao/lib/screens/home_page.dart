@@ -1355,7 +1355,7 @@ class _HomePageState extends State<HomePage> {
         backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
         elevation: 0,
         title: Text(
-          'PumpScout Davao',
+          'PumpScout',
           style: TextStyle(
             color: Theme.of(context).textTheme.bodyLarge?.color,
             fontWeight: FontWeight.bold,
