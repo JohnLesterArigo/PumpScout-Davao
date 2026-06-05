@@ -10,6 +10,7 @@ class StationPrice {
     this.gasoline,
     this.diesel,
     this.premium,
+    this.fuelProducts = const <String, double>{},
     this.updatedAt,
   });
 
@@ -21,6 +22,7 @@ class StationPrice {
   final double? gasoline;
   final double? diesel;
   final double? premium;
+  final Map<String, double> fuelProducts;
   final DateTime? updatedAt;
 
   factory StationPrice.fromFirestore(
@@ -36,6 +38,7 @@ class StationPrice {
       gasoline: _stationFuelPrice(data, 'gasoline'),
       diesel: _stationFuelPrice(data, 'diesel'),
       premium: _stationFuelPrice(data, 'premium'),
+      fuelProducts: _doubleMapField(data, 'fuelProducts'),
       updatedAt: _dateTimeField(data, 'updatedAt'),
     );
   }
@@ -48,6 +51,7 @@ class PriceReport {
     this.gasoline,
     this.diesel,
     this.premium,
+    this.fuelProducts = const <String, double>{},
     this.photoUrl,
   });
 
@@ -56,6 +60,7 @@ class PriceReport {
   final double? gasoline;
   final double? diesel;
   final double? premium;
+  final Map<String, double> fuelProducts;
   final String? photoUrl;
 
   factory PriceReport.fromFirestore(
@@ -68,6 +73,7 @@ class PriceReport {
       gasoline: _doubleField(data, 'gasoline'),
       diesel: _doubleField(data, 'diesel'),
       premium: _doubleField(data, 'premium'),
+      fuelProducts: _doubleMapField(data, 'fuelProducts'),
       photoUrl: _stringField(data, 'photoUrl'),
     );
   }
@@ -156,6 +162,7 @@ class AdminContribution {
     this.gasoline,
     this.diesel,
     this.premium,
+    this.fuelProducts = const <String, double>{},
     this.photoUrl,
     this.userId,
     this.userDisplayName,
@@ -178,6 +185,7 @@ class AdminContribution {
   final double? gasoline;
   final double? diesel;
   final double? premium;
+  final Map<String, double> fuelProducts;
   final String? photoUrl;
   final String? userId;
   final String? userDisplayName;
@@ -204,6 +212,7 @@ class AdminContribution {
       gasoline: _doubleField(data, 'gasoline'),
       diesel: _doubleField(data, 'diesel'),
       premium: _doubleField(data, 'premium'),
+      fuelProducts: _doubleMapField(data, 'fuelProducts'),
       photoUrl: _stringField(data, 'photoUrl'),
       userId: _stringField(data, 'userId'),
       userDisplayName: _stringField(data, 'userDisplayName'),

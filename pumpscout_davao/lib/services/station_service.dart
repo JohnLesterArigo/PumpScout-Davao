@@ -7,31 +7,31 @@ Future<List<dynamic>> fetchGasStations(double lat, double lng) async {
   (
     node
       ["amenity"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     way
       ["amenity"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     relation
       ["amenity"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     node
       ["shop"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     way
       ["shop"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     relation
       ["shop"="fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     node
       ["fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     way
       ["fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
     relation
       ["fuel"]
-      (around:8000,$lat,$lng);
+      (around:$stationDemoRadiusMeters,$lat,$lng);
   );
   out center;
   """;

@@ -15,6 +15,9 @@ class _MapContainerState extends State<MapContainer> {
   static const String terrainSourceId = 'mapbox-dem';
   static const String buildingsLayerId = '3d-buildings';
   static const bool enableDetailed3D = false;
+  static const double clusterZoomThreshold = 13.4;
+  static const int maxVisibleStationMarkers = 160;
+  static const int maxVisibleClusterMarkers = 80;
 
   MapboxMap? mapboxMap;
   CircleAnnotationManager? stationAnnotationManager;
@@ -31,6 +34,8 @@ class _MapContainerState extends State<MapContainer> {
   _RouteDashboardData? activeRouteDashboard;
   bool isRouteActive = false;
   int stationLoadId = 0;
+  double currentMapZoom = 16;
+  Timer? markerClusterDebounce;
 
   String get mapStyleUri =>
       widget.isDarkMode ? MapboxStyles.DARK : MapboxStyles.MAPBOX_STREETS;
@@ -44,6 +49,7 @@ class _MapContainerState extends State<MapContainer> {
   @override
   void dispose() {
     locationSubscription?.cancel();
+    markerClusterDebounce?.cancel();
     super.dispose();
   }
 
@@ -256,6 +262,21 @@ class _MapContainerState extends State<MapContainer> {
         });
   }
 
+  void handleMapZoomChanged(double zoom) {
+    final wasClusterMode = currentMapZoom < clusterZoomThreshold;
+    final isClusterMode = zoom < clusterZoomThreshold;
+    currentMapZoom = zoom;
+
+    if (wasClusterMode == isClusterMode || cachedStations == null) return;
+
+    markerClusterDebounce?.cancel();
+    markerClusterDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted || cachedStations == null || mapboxMap == null) return;
+      final loadId = ++stationLoadId;
+      drawStationMarkers(cachedStations!, loadId);
+    });
+  }
+
   Future<void> refreshForLocation(
     geo.Position location, {
     required bool moveCamera,
@@ -341,7 +362,7 @@ class _MapContainerState extends State<MapContainer> {
             station.lat,
             station.lng,
           );
-          return distance <= 12000;
+          return distance <= stationDemoRadiusMeters;
         })
         .map(
           (station) => {
@@ -393,67 +414,157 @@ class _MapContainerState extends State<MapContainer> {
   Future<void> drawStationMarkers(List<dynamic> stations, int loadId) async {
     stationAnnotationManager ??= await mapboxMap!.annotations
         .createCircleAnnotationManager();
+    stationLabelManager ??= await mapboxMap!.annotations
+        .createPointAnnotationManager();
     await stationAnnotationManager!.deleteAll();
+    await stationLabelManager!.deleteAll();
+    await stationLabelManager!.setTextAllowOverlap(true);
+    await stationLabelManager!.setTextIgnorePlacement(true);
     stationDetailsByAnnotationId.clear();
     nearbyStationDetails = [];
 
     var markerCount = 0;
-    final sortedStations = _stationsSortedByDistance(stations).take(80);
+    final sortedStations = _stationsSortedByDistance(stations);
+    final markerSource = currentMapZoom < clusterZoomThreshold
+        ? sortedStations
+        : sortedStations.take(maxVisibleStationMarkers).toList();
 
-    for (var station in sortedStations) {
-      final stationLat = _stationLatitude(station);
-      final stationLng = _stationLongitude(station);
-      if (stationLat == null || stationLng == null) continue;
-      final liveName = _stationName(station);
-      final price = _nearestPriceFor(stationLat, stationLng, liveName);
-      final hasLiveName = liveName != 'Fuel';
-      final name = hasLiveName ? liveName : price?.name ?? liveName;
-      final brand = hasLiveName
-          ? liveName
-          : price?.brand.isNotEmpty == true
-          ? price!.brand
-          : name;
-      final distanceMeters = currentLocation == null
-          ? null
-          : geo.Geolocator.distanceBetween(
-              currentLocation!.latitude,
-              currentLocation!.longitude,
-              stationLat,
-              stationLng,
-            );
-      final details = StationMarkerDetails(
-        name: name,
-        brand: brand,
-        lat: stationLat,
-        lng: stationLng,
-        distanceMeters: distanceMeters,
-        price: price,
-      );
-      nearbyStationDetails.add(details);
-
-      try {
-        final annotation = await stationAnnotationManager!.create(
-          CircleAnnotationOptions(
-            geometry: Point(coordinates: Position(stationLng, stationLat)),
-            circleColor: price == null
-                ? const Color(0xFF9CA3AF).toARGB32()
-                : const Color(0xFF00C853).toARGB32(),
-            circleRadius: 7,
-            circleStrokeColor: Colors.white.toARGB32(),
-            circleStrokeWidth: 2,
-            circleOpacity: 0.95,
-            customData: {'stationIndex': markerCount},
-          ),
-        );
-        stationDetailsByAnnotationId[annotation.id] = details;
-        markerCount++;
-      } catch (error) {
-        debugPrint('Station marker draw failed for $name: $error');
+    final clusteredItems = _clusteredMarkerItemsForStations(markerSource);
+    if (clusteredItems.isNotEmpty) {
+      for (final item in clusteredItems) {
+        if (markerCount >= maxVisibleClusterMarkers) break;
+        if (item is! _StationCluster) continue;
+        final cluster = item;
+        try {
+          final annotation = await stationAnnotationManager!.create(
+            CircleAnnotationOptions(
+              geometry: Point(
+                coordinates: Position(cluster.centerLng, cluster.centerLat),
+              ),
+              circleColor: const Color(0xFFFBBF24).toARGB32(),
+              circleRadius: (12 + math.min(cluster.count, 24) * 0.45)
+                  .toDouble(),
+              circleStrokeColor: Colors.white.toARGB32(),
+              circleStrokeWidth: 2.5,
+              circleOpacity: 0.92,
+            ),
+          );
+          final clusterDetails = StationMarkerDetails(
+            name: '${cluster.count} stations',
+            brand: 'Cluster',
+            lat: cluster.centerLat,
+            lng: cluster.centerLng,
+            distanceMeters: currentLocation == null
+                ? null
+                : geo.Geolocator.distanceBetween(
+                    currentLocation!.latitude,
+                    currentLocation!.longitude,
+                    cluster.centerLat,
+                    cluster.centerLng,
+                  ),
+          );
+          stationDetailsByAnnotationId[annotation.id] = clusterDetails;
+          final label = await stationLabelManager!.create(
+            PointAnnotationOptions(
+              geometry: Point(
+                coordinates: Position(cluster.centerLng, cluster.centerLat),
+              ),
+              textField: cluster.count.toString(),
+              textAnchor: TextAnchor.CENTER,
+              textJustify: TextJustify.CENTER,
+              textSize: cluster.count >= 100 ? 12 : 13,
+              textColor: const Color(0xFF2B2100).toARGB32(),
+              textHaloColor: Colors.white.toARGB32(),
+              textHaloWidth: 0.6,
+              symbolSortKey: 1000 + cluster.count.toDouble(),
+            ),
+          );
+          stationDetailsByAnnotationId[label.id] = clusterDetails;
+          markerCount++;
+        } catch (error) {
+          debugPrint('Station cluster draw failed: $error');
+        }
       }
+
+      stationAnnotationManager!.tapEvents(onTap: showStationPriceSheet);
+      stationLabelManager!.tapEvents(onTap: showStationLabelTap);
+      debugPrint('Loaded $markerCount clustered station markers');
+      return;
+    }
+
+    for (var station in markerSource) {
+      final didDraw = await _drawSingleStationMarker(station, markerCount);
+      if (didDraw) markerCount++;
     }
 
     stationAnnotationManager!.tapEvents(onTap: showStationPriceSheet);
+    stationLabelManager!.tapEvents(onTap: showStationLabelTap);
     debugPrint('Loaded $markerCount nearby fuel station markers');
+  }
+
+  Future<bool> _drawSingleStationMarker(
+    dynamic station,
+    int markerCount,
+  ) async {
+    final lat = _stationLatitude(station);
+    final lng = _stationLongitude(station);
+    if (lat == null || lng == null) return false;
+
+    final stationMap = station is Map<String, dynamic>
+        ? station
+        : <String, dynamic>{};
+    final rawTags = stationMap['tags'];
+    final tags = rawTags is Map
+        ? Map<String, dynamic>.from(rawTags)
+        : <String, dynamic>{};
+    final name = _stringField(
+      tags,
+      'name',
+      fallback: _stringField(tags, 'operator', fallback: 'Fuel station'),
+    );
+    final brand = _stringField(
+      tags,
+      'brand',
+      fallback: _stringField(tags, 'operator', fallback: name),
+    );
+    final price = _nearestPriceFor(lat, lng, name);
+    final distanceMeters = currentLocation == null
+        ? null
+        : geo.Geolocator.distanceBetween(
+            currentLocation!.latitude,
+            currentLocation!.longitude,
+            lat,
+            lng,
+          );
+    final details = StationMarkerDetails(
+      name: price?.name ?? name,
+      brand: price?.brand.isNotEmpty == true ? price!.brand : brand,
+      lat: lat,
+      lng: lng,
+      distanceMeters: distanceMeters,
+      price: price,
+    );
+
+    try {
+      final annotation = await stationAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(lng, lat)),
+          circleColor: price == null
+              ? const Color(0xFF8A8A8A).toARGB32()
+              : const Color(0xFF1E8E3E).toARGB32(),
+          circleRadius: 7.5,
+          circleStrokeColor: Colors.white.toARGB32(),
+          circleStrokeWidth: 2,
+          circleOpacity: 0.94,
+        ),
+      );
+      stationDetailsByAnnotationId[annotation.id] = details;
+      nearbyStationDetails.add(details);
+      return true;
+    } catch (error) {
+      debugPrint('Station marker draw failed at $markerCount: $error');
+      return false;
+    }
   }
 
   List<dynamic> _stationsSortedByDistance(List<dynamic> stations) {
@@ -484,6 +595,48 @@ class _MapContainerState extends State<MapContainer> {
       return aDistance.compareTo(bDistance);
     });
     return sorted;
+  }
+
+  List<dynamic> _clusteredMarkerItemsForStations(List<dynamic> stations) {
+    if (currentMapZoom >= clusterZoomThreshold) {
+      return const <dynamic>[];
+    }
+
+    final cellSize = currentMapZoom < 11.5
+        ? 0.035
+        : currentMapZoom < 12.5
+        ? 0.022
+        : 0.014;
+    final groups = <String, List<dynamic>>{};
+
+    for (final station in stations) {
+      final lat = _stationLatitude(station);
+      final lng = _stationLongitude(station);
+      if (lat == null || lng == null) continue;
+
+      final key = '${(lat / cellSize).floor()}:${(lng / cellSize).floor()}';
+      groups.putIfAbsent(key, () => <dynamic>[]).add(station);
+    }
+
+    final clusters = <_StationCluster>[];
+    for (final group in groups.values) {
+      var latSum = 0.0;
+      var lngSum = 0.0;
+      for (final station in group) {
+        latSum += _stationLatitude(station) ?? 0;
+        lngSum += _stationLongitude(station) ?? 0;
+      }
+      clusters.add(
+        _StationCluster(
+          centerLat: latSum / group.length,
+          centerLng: lngSum / group.length,
+          count: group.length,
+        ),
+      );
+    }
+
+    clusters.sort((a, b) => b.count.compareTo(a.count));
+    return clusters;
   }
 
   StationPrice? _nearestPriceFor(double lat, double lng, String liveName) {
@@ -583,7 +736,31 @@ class _MapContainerState extends State<MapContainer> {
       return;
     }
 
+    if (details.brand == 'Cluster') {
+      zoomToStationCluster(details);
+      return;
+    }
+
     showStationDetailSheet(details);
+  }
+
+  void showStationLabelTap(PointAnnotation annotation) {
+    final details = stationDetailsByAnnotationId[annotation.id];
+    if (details?.brand == 'Cluster') {
+      zoomToStationCluster(details!);
+    }
+  }
+
+  Future<void> zoomToStationCluster(StationMarkerDetails details) async {
+    await mapboxMap?.flyTo(
+      CameraOptions(
+        center: Point(coordinates: Position(details.lng, details.lat)),
+        zoom: math.max(currentMapZoom + 2.2, clusterZoomThreshold + 0.8),
+        pitch: 55,
+        bearing: -20,
+      ),
+      MapAnimationOptions(duration: 650),
+    );
   }
 
   void showStationDetailSheet(StationMarkerDetails details) {
@@ -680,23 +857,11 @@ class _MapContainerState extends State<MapContainer> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: _canReportPrice(details)
-                        ? () => showPriceReportSheet(details)
-                        : null,
+                    onPressed: () => showPriceReportSheet(details),
                     icon: const Icon(Icons.edit_location_alt),
                     label: const Text('Report updated prices'),
                   ),
                 ),
-                if (!_canReportPrice(details)) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    'You must be within 3 km of this station to report prices.',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
                 const SizedBox(height: 16),
                 Text(
                   'Current Prices',
@@ -728,7 +893,7 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   void showNearbyStationsPanel() {
-    final stations = _nearbyStationsWithin3Km();
+    final stations = _nearbyStationsWithinDemoRange();
 
     showModalBottomSheet(
       context: context,
@@ -740,7 +905,7 @@ class _MapContainerState extends State<MapContainer> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
-            final sortedStations = _nearbyStationsWithin3Km();
+            final sortedStations = _nearbyStationsWithinDemoRange();
 
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
@@ -756,7 +921,7 @@ class _MapContainerState extends State<MapContainer> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Within 3 km • Sorted by distance',
+                    'Within 20 km • Sorted by distance',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -765,7 +930,7 @@ class _MapContainerState extends State<MapContainer> {
                   if (stations.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Text('No nearby stations within 3 km yet.'),
+                      child: Text('No nearby stations within 20 km yet.'),
                     )
                   else
                     SizedBox(
@@ -809,7 +974,7 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   void showCheapestStationsPanel() {
-    var selectedRangeKm = 3;
+    var selectedRangeKm = 20;
     var selectedFuel = 'gasoline';
 
     showModalBottomSheet(
@@ -861,6 +1026,7 @@ class _MapContainerState extends State<MapContainer> {
                             DropdownMenuItem(value: 3, child: Text('3 km')),
                             DropdownMenuItem(value: 8, child: Text('8 km')),
                             DropdownMenuItem(value: 10, child: Text('10 km')),
+                            DropdownMenuItem(value: 20, child: Text('20 km')),
                           ],
                           onChanged: (value) {
                             if (value == null) return;
@@ -1029,10 +1195,10 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
-  List<StationMarkerDetails> _nearbyStationsWithin3Km() {
+  List<StationMarkerDetails> _nearbyStationsWithinDemoRange() {
     final stations = nearbyStationDetails.where((details) {
       final distance = details.distanceMeters;
-      return distance != null && distance <= 3000;
+      return distance != null && distance <= stationDemoRadiusMeters;
     }).toList();
 
     stations.sort((a, b) {
@@ -1525,7 +1691,7 @@ class _MapContainerState extends State<MapContainer> {
                     ),
                   ),
                   Text(
-                    '${forecast.confidencePercent}% confidence',
+                    '${forecast.confidencePercent}% data confidence',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 11,
@@ -1688,8 +1854,7 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   bool _canReportPrice(StationMarkerDetails details) {
-    final distance = details.distanceMeters;
-    return distance != null && distance <= 3000;
+    return true;
   }
 
   void showPriceReportSheet(StationMarkerDetails details) {
@@ -2105,7 +2270,7 @@ class _MapContainerState extends State<MapContainer> {
         .where((details) {
           final distance = details.distanceMeters;
           return distance != null &&
-              distance <= 12000 &&
+              distance <= stationDemoRadiusMeters &&
               _fuelPrice(details.price, fuelType) != null;
         })
         .map((details) {
@@ -3017,6 +3182,9 @@ class _MapContainerState extends State<MapContainer> {
             );
             startLocationUpdates();
           },
+          onCameraChangeListener: (event) {
+            handleMapZoomChanged(event.cameraState.zoom);
+          },
           onStyleLoadedListener: (_) async {
             stationAnnotationManager = null;
             stationLabelManager = null;
@@ -3082,6 +3250,18 @@ class _MapContainerState extends State<MapContainer> {
       ],
     );
   }
+}
+
+class _StationCluster {
+  const _StationCluster({
+    required this.centerLat,
+    required this.centerLng,
+    required this.count,
+  });
+
+  final double centerLat;
+  final double centerLng;
+  final int count;
 }
 
 class _FuelConsumptionProfile {

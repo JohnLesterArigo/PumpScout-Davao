@@ -20,6 +20,17 @@ function ConvertTo-FirestoreValue {
     return $null
   }
 
+  if ($Value -is [hashtable]) {
+    $fields = @{}
+    foreach ($key in $Value.Keys) {
+      $converted = ConvertTo-FirestoreValue $Value[$key]
+      if ($null -ne $converted) {
+        $fields[$key] = $converted
+      }
+    }
+    return @{ mapValue = @{ fields = $fields } }
+  }
+
   $text = "$Value".Trim()
   if ($text.Length -eq 0) {
     return $null
@@ -27,6 +38,9 @@ function ConvertTo-FirestoreValue {
 
   $number = 0.0
   if ([double]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+    if ($number -le 0) {
+      return $null
+    }
     return @{ doubleValue = $number }
   }
 
@@ -96,6 +110,57 @@ function Get-AccessToken {
   return $tokenResponse.access_token
 }
 
+function Add-FuelProduct {
+  param(
+    [hashtable]$Products,
+    [string]$Name,
+    $Value
+  )
+
+  $number = 0.0
+  if ([double]::TryParse("$Value", [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+    if ($number -gt 0) {
+      $Products[$Name] = $number
+    }
+  }
+}
+
+function Get-FuelProducts {
+  param($Row)
+
+  $brand = "$($Row.brand)".ToLowerInvariant()
+  $products = @{}
+
+  if ($brand -match "shell") {
+    Add-FuelProduct $products "Shell FuelSave Gasoline" $Row.gasoline
+    Add-FuelProduct $products "Shell V-Power Gasoline" $Row.premium
+    Add-FuelProduct $products "Shell FuelSave Diesel" $Row.diesel
+    Add-FuelProduct $products "Shell V-Power Diesel" $Row.other_fuel
+    return $products
+  }
+
+  if ($brand -match "petron") {
+    Add-FuelProduct $products "Petron Xtra Advance" $Row.gasoline
+    Add-FuelProduct $products "Petron XCS" $Row.premium
+    Add-FuelProduct $products "Petron Diesel Max" $Row.diesel
+
+    $otherValues = "$($Row.other_fuel)".Split("|") | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 }
+    if ($otherValues.Count -eq 1) {
+      Add-FuelProduct $products "Petron Turbo Diesel" $otherValues[0]
+    } elseif ($otherValues.Count -gt 1) {
+      Add-FuelProduct $products "Petron Turbo Diesel" $otherValues[0]
+      Add-FuelProduct $products "Petron Blaze 100" $otherValues[-1]
+    }
+    return $products
+  }
+
+  Add-FuelProduct $products "Gasoline" $Row.gasoline
+  Add-FuelProduct $products "Diesel" $Row.diesel
+  Add-FuelProduct $products "Premium" $Row.premium
+  Add-FuelProduct $products "Other Fuel" $Row.other_fuel
+  return $products
+}
+
 if (!(Test-Path -LiteralPath $CsvPath)) {
   throw "CSV file was not found: $CsvPath"
 }
@@ -141,6 +206,12 @@ foreach ($row in $rows) {
     if ($null -ne $value) {
       $fields[$column] = $value
     }
+  }
+
+  $fuelProducts = Get-FuelProducts $row
+  $fuelProductsValue = ConvertTo-FirestoreValue $fuelProducts
+  if ($null -ne $fuelProductsValue) {
+    $fields["fuelProducts"] = $fuelProductsValue
   }
 
   $docId = New-FirestoreDocumentId $row

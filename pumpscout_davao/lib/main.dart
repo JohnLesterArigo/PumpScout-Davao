@@ -37,6 +37,7 @@ const String accessToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
 
 const String cloudinaryCloudName = 'dftodunis';
 const String cloudinaryUploadPreset = 'pumpscout_reports';
+const int stationDemoRadiusMeters = 20000;
 
 bool get isCloudinaryConfigured =>
     cloudinaryCloudName != 'YOUR_CLOUDINARY_CLOUD_NAME' &&

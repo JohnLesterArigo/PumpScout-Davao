@@ -1,21 +1,5 @@
 part of '../main.dart';
 
-String _stationName(dynamic station) {
-  if (station is! Map<String, dynamic>) return 'Fuel';
-
-  final tags = station['tags'];
-  if (tags is Map<String, dynamic>) {
-    for (final key in ['brand', 'name', 'operator']) {
-      final value = tags[key];
-      if (value is String && value.trim().isNotEmpty) {
-        return value.trim();
-      }
-    }
-  }
-
-  return 'Fuel';
-}
-
 String _stringField(
   Map<String, dynamic> data,
   String key, {
@@ -52,6 +36,31 @@ double? _doubleAnyField(Map<String, dynamic> data, List<String> keys) {
   }
 
   return null;
+}
+
+Map<String, double> _doubleMapField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is! Map) return const <String, double>{};
+
+  final result = <String, double>{};
+  for (final entry in value.entries) {
+    final label = entry.key.toString().trim();
+    if (label.isEmpty) continue;
+
+    final rawValue = entry.value;
+    double? price;
+    if (rawValue is num) {
+      price = rawValue.toDouble();
+    } else if (rawValue is String) {
+      price = double.tryParse(rawValue.trim().replaceAll(',', ''));
+    }
+
+    if (price != null && price > 0) {
+      result[label] = price;
+    }
+  }
+
+  return result;
 }
 
 double? _stationFuelPrice(Map<String, dynamic> data, String fuelType) {

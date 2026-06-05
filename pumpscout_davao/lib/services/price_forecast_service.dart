@@ -51,7 +51,7 @@ FuelPriceForecast? forecastFuelPrice(
 
   if (points.length < 3) return null;
 
-  final band = regionalStats?.bandFor(fuelType);
+  final band = regionalStats?.bandFor(_forecastBandFuelType(fuelType));
   var cleaned = _removeOutliers(points, band);
   if (cleaned.length < 3 && band != null) {
     cleaned = _removeOutliers(points, null);
@@ -208,11 +208,52 @@ double _forecastConfidence({
 }
 
 double? _reportFuelPrice(PriceReport report, String fuelType) {
+  if (_isFuelProductKey(fuelType)) {
+    final productLabel = _fuelProductLabelFromKey(fuelType);
+    final productPrice = report.fuelProducts[productLabel];
+    if (productPrice != null && productPrice > 0) return productPrice;
+
+    return switch (_fuelCategoryForProductLabel(productLabel)) {
+      'diesel' => report.diesel,
+      'premium' => report.premium,
+      _ => report.gasoline,
+    };
+  }
+
   return switch (fuelType) {
     'diesel' => report.diesel,
     'premium' => report.premium,
     _ => report.gasoline,
   };
+}
+
+String _forecastBandFuelType(String fuelType) {
+  if (_isFuelProductKey(fuelType)) {
+    return _fuelCategoryForProductLabel(_fuelProductLabelFromKey(fuelType));
+  }
+  return fuelType;
+}
+
+bool _isFuelProductKey(String fuelType) => fuelType.startsWith('product:');
+
+String _fuelProductLabelFromKey(String fuelType) {
+  return _isFuelProductKey(fuelType)
+      ? fuelType.substring('product:'.length)
+      : fuelType;
+}
+
+String _fuelCategoryForProductLabel(String label) {
+  final normalized = label.toLowerCase();
+  if (normalized.contains('diesel')) return 'diesel';
+  if (normalized.contains('v-power') ||
+      normalized.contains('xcs') ||
+      normalized.contains('blaze') ||
+      normalized.contains('premium') ||
+      normalized.contains('platinum') ||
+      normalized.contains('extreme 95')) {
+    return 'premium';
+  }
+  return 'gasoline';
 }
 
 class _ForecastPoint {

@@ -2336,6 +2336,20 @@ class _NotificationInboxPage extends StatefulWidget {
 
 class _NotificationInboxPageState extends State<_NotificationInboxPage> {
   bool isMarkingAllRead = false;
+  bool isDeletingRead = false;
+  late Future<List<UserNotification>> notificationsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    notificationsFuture = loadNotifications();
+  }
+
+  void refreshNotifications() {
+    setState(() {
+      notificationsFuture = loadNotifications();
+    });
+  }
 
   Future<List<UserNotification>> loadNotifications() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -2363,7 +2377,7 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
           'readAt': Timestamp.now(),
         }, SetOptions(merge: true));
 
-    if (mounted) setState(() {});
+    if (mounted) refreshNotifications();
   }
 
   Future<void> markAllRead(List<UserNotification> notifications) async {
@@ -2384,7 +2398,88 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
     }
     await batch.commit();
     if (mounted) {
-      setState(() => isMarkingAllRead = false);
+      setState(() {
+        isMarkingAllRead = false;
+        notificationsFuture = loadNotifications();
+      });
+    }
+  }
+
+  Future<void> deleteReadNotifications(
+    List<UserNotification> notifications,
+  ) async {
+    final readNotifications = notifications
+        .where((item) => item.isRead)
+        .toList();
+    if (readNotifications.isEmpty || isDeletingRead) return;
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete read notifications?'),
+          content: Text(
+            'This will delete ${readNotifications.length} notification${readNotifications.length == 1 ? '' : 's'} that you already read. Unread notifications will stay in your inbox.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete read'),
+            ),
+          ],
+        );
+      },
+    );
+    if (shouldDelete != true || !mounted) return;
+
+    setState(() => isDeletingRead = true);
+
+    try {
+      var batch = FirebaseFirestore.instance.batch();
+      var batchCount = 0;
+      for (final notification in readNotifications) {
+        batch.delete(
+          FirebaseFirestore.instance
+              .collection('notifications')
+              .doc(notification.id),
+        );
+        batchCount++;
+
+        if (batchCount == 450) {
+          await batch.commit();
+          batch = FirebaseFirestore.instance.batch();
+          batchCount = 0;
+        }
+      }
+
+      if (batchCount > 0) {
+        await batch.commit();
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Deleted ${readNotifications.length} read notification${readNotifications.length == 1 ? '' : 's'}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not delete notifications: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isDeletingRead = false;
+          notificationsFuture = loadNotifications();
+        });
+      }
     }
   }
 
@@ -2396,15 +2491,34 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
         title: 'Inbox',
         actions: [
           FutureBuilder<List<UserNotification>>(
-            future: loadNotifications(),
+            future: notificationsFuture,
             builder: (context, snapshot) {
               final notifications = snapshot.data ?? const <UserNotification>[];
               final hasUnread = notifications.any((item) => !item.isRead);
-              return TextButton(
-                onPressed: hasUnread && !isMarkingAllRead
-                    ? () => markAllRead(notifications)
-                    : null,
-                child: const Text('Mark all read'),
+              final hasRead = notifications.any((item) => item.isRead);
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: hasUnread && !isMarkingAllRead
+                        ? () => markAllRead(notifications)
+                        : null,
+                    child: const Text('Mark all read'),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete read notifications',
+                    onPressed: hasRead && !isDeletingRead
+                        ? () => deleteReadNotifications(notifications)
+                        : null,
+                    icon: isDeletingRead
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_sweep_outlined),
+                  ),
+                ],
               );
             },
           ),
@@ -2412,7 +2526,7 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
       ),
       body: SafeArea(
         child: FutureBuilder<List<UserNotification>>(
-          future: loadNotifications(),
+          future: notificationsFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(
@@ -2448,7 +2562,7 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'No messages yet.',
+                        'No Notifications yet.',
                         style: TextStyle(
                           color: _psPrimaryTextColor(context),
                           fontWeight: FontWeight.w900,
@@ -2456,7 +2570,7 @@ class _NotificationInboxPageState extends State<_NotificationInboxPage> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Contribution review updates will appear here.',
+                        'Notifications will appear here.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: _psMutedTextColor(context)),
                       ),
@@ -2935,6 +3049,9 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
         if (report.gasoline != null) updateData['gasoline'] = report.gasoline;
         if (report.diesel != null) updateData['diesel'] = report.diesel;
         if (report.premium != null) updateData['premium'] = report.premium;
+        if (report.fuelProducts.isNotEmpty) {
+          updateData['fuelProducts'] = report.fuelProducts;
+        }
 
         await FirebaseFirestore.instance
             .collection('stations')

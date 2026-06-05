@@ -57,11 +57,7 @@ class ContributionClassification {
           ? const ['Automatic quality screening completed.']
           : reasons,
       breakdown: breakdown,
-      modelVersion: _stringField(
-        data,
-        'modelVersion',
-        fallback: 'rules-v1',
-      ),
+      modelVersion: _stringField(data, 'modelVersion', fallback: 'rules-v1'),
     );
   }
 }
@@ -71,13 +67,19 @@ ContributionClassification classifyPriceContribution({
   required double? gasoline,
   required double? diesel,
   required double? premium,
+  List<double> extraFuelPrices = const <double>[],
   required bool hasPhoto,
   required bool photoUploadFailed,
 }) {
   final reasons = <String>[];
   var riskScore = 0;
 
-  final prices = <double>[?gasoline, ?diesel, ?premium];
+  final prices = <double>[
+    ?gasoline,
+    ?diesel,
+    ?premium,
+    ...extraFuelPrices,
+  ];
 
   if (prices.isEmpty) {
     riskScore += 45;
@@ -117,12 +119,6 @@ ContributionClassification classifyPriceContribution({
   if (_looksLikeSpamText('${station.name} ${station.brand}')) {
     riskScore += 45;
     _addReason(reasons, 'Station text contains suspicious spam-like content.');
-  }
-
-  final distance = station.distanceMeters;
-  if (distance == null || distance > 3000) {
-    riskScore += 20;
-    _addReason(reasons, 'Reporter distance could not be verified within 3 km.');
   }
 
   if (photoUploadFailed) {
