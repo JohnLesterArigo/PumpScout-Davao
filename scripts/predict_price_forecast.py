@@ -3,7 +3,12 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from train_price_forecast_model import NUMERIC_FEATURES, load_rows, normalize_fuel_type
+from train_price_forecast_model import (
+    NUMERIC_FEATURES,
+    load_rows,
+    normalize_fuel_type,
+    normalize_product_type,
+)
 
 
 DEFAULT_DATA = Path("data/training/PumpScout_Davao_Synthetic_fuel_prices.csv")
@@ -16,6 +21,10 @@ def main():
     )
     parser.add_argument("--station", help="Station id, for example synthetic_shell_001")
     parser.add_argument("--fuel", default="diesel", help="diesel, regular/gasoline, or premium")
+    parser.add_argument(
+        "--product",
+        help="Optional product type, for example shell_vpower_diesel.",
+    )
     parser.add_argument("--data", default=str(DEFAULT_DATA))
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     parser.add_argument(
@@ -37,11 +46,13 @@ def main():
 
     model = json.loads(Path(args.model).read_text(encoding="utf-8"))
     fuel_type = normalize_fuel_type(args.fuel)
-    history = station_fuel_history(rows, args.station, fuel_type)
+    product_type = normalize_product_type(args.product or args.fuel)
+    history = station_product_history(rows, args.station, fuel_type, product_type)
 
     if len(history) < 3:
         raise SystemExit(
-            f"Need at least 3 rows for station={args.station}, fuel={fuel_type}. "
+            f"Need at least 3 rows for station={args.station}, "
+            f"fuel={fuel_type}, product={product_type}. "
             f"Found {len(history)}."
         )
 
@@ -53,6 +64,7 @@ def main():
     print(f"Station: {latest['station_name']} ({latest['station_id']})")
     print(f"Brand: {latest['brand']}")
     print(f"Fuel: {fuel_type}")
+    print(f"Product: {latest['product_type']}")
     print(f"Latest date: {latest['date']}")
     print(f"Previous price: PHP {previous['price']:.2f}")
     print(f"Latest price: PHP {latest['price']:.2f}")
@@ -60,11 +72,13 @@ def main():
     print(f"Change: PHP {prediction - latest['price']:+.2f}")
 
 
-def station_fuel_history(rows, station_id, fuel_type):
+def station_product_history(rows, station_id, fuel_type, product_type):
     history = [
         row
         for row in rows
-        if row["station_id"] == station_id and row["fuel_type"] == fuel_type
+        if row["station_id"] == station_id
+        and row["fuel_type"] == fuel_type
+        and row["product_type"] == product_type
     ]
     history.sort(key=lambda row: row["date"])
     return history
@@ -97,6 +111,11 @@ def predict_next_price(model, history):
     for option in model["fuelTypes"]:
         features[f"fuel_type={option}"] = 1.0 if current["fuel_type"] == option else 0.0
 
+    for option in model.get("productTypes", []):
+        features[f"product_type={option}"] = (
+            1.0 if current["product_type"] == option else 0.0
+        )
+
     for option in model["brands"]:
         features[f"brand={option}"] = 1.0 if current["brand"] == option else 0.0
 
@@ -107,12 +126,12 @@ def predict_next_price(model, history):
 def print_station_examples(rows):
     grouped = defaultdict(set)
     for row in rows:
-        grouped[row["station_id"]].add(row["fuel_type"])
+        grouped[row["station_id"]].add(row["product_type"])
 
     print("Example station ids:")
     for station_id in sorted(grouped)[:20]:
-        fuels = ", ".join(sorted(grouped[station_id]))
-        print(f"- {station_id}: {fuels}")
+        products = ", ".join(sorted(grouped[station_id]))
+        print(f"- {station_id}: {products}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "modelType": "linear_regression_next_week_price",
   "modelVersion": "synthetic-linear-v1",
-  "trainedAt": "2026-06-07T14:57:51+00:00",
+  "trainedAt": "2026-06-08T04:27:23+00:00",
   "sourceCsv": "data\\training\\PumpScout_Davao_Synthetic_fuel_prices.csv",
   "target": "next_week_price",
   "numericFeatures": [
@@ -20,89 +20,177 @@
     "gasoline",
     "premium"
   ],
+  "productTypes": [
+    "caltex_gold_95",
+    "caltex_platinum_97",
+    "caltex_power_diesel",
+    "caltex_silver_91",
+    "cleanfuel_diesel",
+    "cleanfuel_premium",
+    "cleanfuel_unleaded",
+    "flyingv_diesel",
+    "flyingv_premium",
+    "flyingv_unleaded",
+    "jetti_accelerate_91",
+    "jetti_dieselmaster",
+    "jetti_premium_95",
+    "petron_blaze_100",
+    "petron_diesel_max",
+    "petron_extra_advance",
+    "petron_turbo_diesel",
+    "petron_xcs",
+    "phoenix_diesel",
+    "phoenix_diesel_plus",
+    "phoenix_premium_98",
+    "phoenix_super_regular",
+    "ptt_diesel",
+    "ptt_premium",
+    "ptt_unleaded",
+    "rephil_diesel",
+    "rephil_premium",
+    "rephil_unleaded",
+    "seaoil_diesel",
+    "seaoil_extreme_97",
+    "seaoil_extreme_diesel",
+    "seaoil_gasoline_91",
+    "shell_fuelsave_diesel",
+    "shell_fuelsave_gasoline",
+    "shell_vpower_diesel",
+    "shell_vpower_gasoline",
+    "unioil_euro5_diesel",
+    "unioil_gasoline_91",
+    "unioil_gasoline_95",
+    "unioil_gasoline_97"
+  ],
   "brands": [
     "caltex",
-    "eagle",
+    "cleanfuel",
+    "flying v",
     "jetti",
     "petron",
     "phoenix",
+    "ptt",
+    "rephil",
     "seaoil",
     "shell",
     "unioil"
   ],
   "scaler": {
     "current_price": {
-      "mean": 84.86575042735042,
-      "std": 8.989564433851234
+      "mean": 85.09429300018716,
+      "std": 9.082582568389098
     },
     "price_1_week_ago": {
-      "mean": 84.8537321937322,
-      "std": 8.962727705162296
+      "mean": 85.07245648512072,
+      "std": 9.077426774688316
     },
     "price_2_weeks_ago": {
-      "mean": 84.83971737891738,
-      "std": 8.936150056632624
+      "mean": 85.04928972487366,
+      "std": 9.071530489037274
     },
     "rolling_avg_3": {
-      "mean": 84.85306666666666,
-      "std": 8.948432546859703
+      "mean": 85.0720130700605,
+      "std": 9.06983365398535
     },
     "change_1_week": {
-      "mean": 0.012018233618233615,
-      "std": 0.7624313229233552
+      "mean": 0.02183651506644207,
+      "std": 0.5494871537826623
     },
     "change_2_weeks": {
-      "mean": 0.014014814814814817,
-      "std": 0.7620794582162821
+      "mean": 0.023166760247052214,
+      "std": 0.5499458684702909
     },
     "week_index": {
       "mean": 21.0,
       "std": 11.254628677422755
     },
     "lat": {
-      "mean": 7.067891253333333,
-      "std": 0.04250940376405931
+      "mean": 7.096056496350365,
+      "std": 0.042364644575206396
     },
     "lng": {
-      "mean": 125.60024591999999,
-      "std": 0.05895600404454344
+      "mean": 125.59297278832116,
+      "std": 0.047374168477217385
     }
   },
   "weights": {
-    "bias": 84.84430014300109,
-    "current_price": 2.2093551991416245,
-    "price_1_week_ago": 2.1747220290331963,
-    "price_2_weeks_ago": 2.1656230851313487,
-    "rolling_avg_3": 2.18678578056422,
-    "change_1_week": 0.4848955285407262,
-    "change_2_weeks": 0.18253808615549671,
-    "week_index": 0.048939401391580345,
-    "lat": 0.1832125550973012,
-    "lng": 0.06006604885435121,
-    "fuel_type=diesel": -0.07702645849288328,
-    "fuel_type=gasoline": 0.08873077725733083,
-    "fuel_type=premium": -0.04645673050651833,
-    "brand=caltex": -0.06494457962335866,
-    "brand=eagle": 0.00787137923289339,
-    "brand=jetti": -0.019647923290542883,
-    "brand=petron": 0.04968598042759398,
-    "brand=phoenix": -0.018980689373604608,
-    "brand=seaoil": 0.0637386231496939,
-    "brand=shell": 0.019386088256727038,
-    "brand=unioil": -0.07186129052147162
+    "bias": 85.13255375601125,
+    "current_price": 2.300177619283664,
+    "price_1_week_ago": 2.281965069401615,
+    "price_2_weeks_ago": 2.276752978379071,
+    "rolling_avg_3": 2.288155086541917,
+    "change_1_week": 0.3224503575652512,
+    "change_2_weeks": 0.11044134341139825,
+    "week_index": 0.06062755086092377,
+    "lat": -0.006718176485306397,
+    "lng": 0.05829235026019718,
+    "fuel_type=diesel": -0.02840639936780556,
+    "fuel_type=gasoline": 0.04683411639243397,
+    "fuel_type=premium": -0.0027982208817540514,
+    "product_type=caltex_gold_95": -0.016040248549244393,
+    "product_type=caltex_platinum_97": 0.09272419035209456,
+    "product_type=caltex_power_diesel": -0.029718512294501336,
+    "product_type=caltex_silver_91": -0.008393049799102725,
+    "product_type=cleanfuel_diesel": 0.0029938143443197403,
+    "product_type=cleanfuel_premium": 0.0077663548567632875,
+    "product_type=cleanfuel_unleaded": 0.036104748670956706,
+    "product_type=flyingv_diesel": 0.045280721502190695,
+    "product_type=flyingv_premium": -0.031963305316611526,
+    "product_type=flyingv_unleaded": 0.006647250016054668,
+    "product_type=jetti_accelerate_91": 0.003349327401051338,
+    "product_type=jetti_dieselmaster": -0.02976026619562615,
+    "product_type=jetti_premium_95": -0.00046063237750442447,
+    "product_type=petron_blaze_100": -0.03875293912763487,
+    "product_type=petron_diesel_max": 0.01822417345537942,
+    "product_type=petron_extra_advance": 0.017677576980379698,
+    "product_type=petron_turbo_diesel": -0.026866426496260674,
+    "product_type=petron_xcs": 0.013167780610653117,
+    "product_type=phoenix_diesel": 0.028696893491265692,
+    "product_type=phoenix_diesel_plus": -0.036906144298005386,
+    "product_type=phoenix_premium_98": -0.06876439780631102,
+    "product_type=phoenix_super_regular": 0.04273356897337695,
+    "product_type=ptt_diesel": -0.05180614436041035,
+    "product_type=ptt_premium": -0.0031741794752300854,
+    "product_type=ptt_unleaded": -0.005377477688017459,
+    "product_type=rephil_diesel": 0.046207174283871257,
+    "product_type=rephil_premium": 0.07750613673698546,
+    "product_type=rephil_unleaded": -0.06465466713648764,
+    "product_type=seaoil_diesel": -0.059756628865789675,
+    "product_type=seaoil_extreme_97": 0.014572205722079698,
+    "product_type=seaoil_extreme_diesel": 0.03737657967848349,
+    "product_type=seaoil_gasoline_91": 0.04465225441911484,
+    "product_type=shell_fuelsave_diesel": -0.03296112927934835,
+    "product_type=shell_fuelsave_gasoline": 0.03887028897504797,
+    "product_type=shell_vpower_diesel": 0.024495040062474868,
+    "product_type=shell_vpower_gasoline": -0.027406611369988097,
+    "product_type=unioil_euro5_diesel": 0.03609445560415226,
+    "product_type=unioil_gasoline_91": -0.06477570441994039,
+    "product_type=unioil_gasoline_95": -0.030615542009829678,
+    "product_type=unioil_gasoline_97": 0.00864296687202502,
+    "brand=caltex": 0.038572379709245125,
+    "brand=cleanfuel": 0.04686491787203917,
+    "brand=flying v": 0.019964666201634257,
+    "brand=jetti": -0.026871571172079826,
+    "brand=petron": -0.016549834577484265,
+    "brand=phoenix": -0.03424007963967258,
+    "brand=ptt": -0.06035780152365748,
+    "brand=rephil": 0.05905864388436965,
+    "brand=seaoil": 0.036844410953888324,
+    "brand=shell": 0.0029975883881858353,
+    "brand=unioil": -0.050653823953593295
   },
   "metrics": {
     "train": {
-      "mae": 0.6739,
-      "rmse": 0.8197,
-      "mape": 0.8018
+      "mae": 0.4704,
+      "rmse": 0.573,
+      "mape": 0.5586
     },
     "test": {
-      "mae": 0.6731,
-      "rmse": 0.8145,
-      "mape": 0.8022
+      "mae": 0.4837,
+      "rmse": 0.5867,
+      "mape": 0.5703
     },
-    "trainingRows": 17550,
-    "testRows": 3600
+    "trainingRows": 21372,
+    "testRows": 4384
   }
 }

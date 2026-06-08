@@ -78,6 +78,7 @@ def main():
         "target": "next_week_price",
         "numericFeatures": NUMERIC_FEATURES,
         "fuelTypes": metadata["fuelTypes"],
+        "productTypes": metadata["productTypes"],
         "brands": metadata["brands"],
         "scaler": scaler,
         "weights": weights,
@@ -140,6 +141,9 @@ def load_rows(path):
                         "lng": float(raw["lng"]),
                         "date": datetime.strptime(raw["date"], "%Y-%m-%d").date(),
                         "fuel_type": normalize_fuel_type(raw["fuel_type"]),
+                        "product_type": normalize_product_type(
+                            raw.get("product_type") or raw["fuel_type"]
+                        ),
                         "price": float(raw["price"]),
                     }
                 )
@@ -152,12 +156,12 @@ def load_rows(path):
 def build_examples(rows):
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(row["station_id"], row["fuel_type"])].append(row)
+        grouped[(row["station_id"], row["product_type"])].append(row)
 
     examples = []
     first_date = min(row["date"] for row in rows)
 
-    for (_, fuel_type), history in grouped.items():
+    for (_, product_type), history in grouped.items():
         history.sort(key=lambda item: item["date"])
         for index in range(2, len(history) - 1):
             previous_2 = history[index - 2]
@@ -170,7 +174,8 @@ def build_examples(rows):
                     "date": current["date"].isoformat(),
                     "station_id": current["station_id"],
                     "brand": current["brand"],
-                    "fuel_type": fuel_type,
+                    "fuel_type": current["fuel_type"],
+                    "product_type": product_type,
                     "target": target["price"],
                     "numeric": {
                         "current_price": current["price"],
@@ -205,6 +210,7 @@ def split_by_last_dates(examples, holdout_dates):
 def build_metadata(examples):
     return {
         "fuelTypes": sorted({example["fuel_type"] for example in examples}),
+        "productTypes": sorted({example["product_type"] for example in examples}),
         "brands": sorted({example["brand"] for example in examples}),
     }
 
@@ -275,6 +281,11 @@ def vectorize(example, metadata, scaler):
             1.0 if example["fuel_type"] == fuel_type else 0.0
         )
 
+    for product_type in metadata["productTypes"]:
+        features[f"product_type={product_type}"] = (
+            1.0 if example["product_type"] == product_type else 0.0
+        )
+
     for brand in metadata["brands"]:
         features[f"brand={brand}"] = 1.0 if example["brand"] == brand else 0.0
 
@@ -284,6 +295,9 @@ def vectorize(example, metadata, scaler):
 def expanded_feature_names(metadata):
     names = ["bias", *NUMERIC_FEATURES]
     names.extend(f"fuel_type={fuel_type}" for fuel_type in metadata["fuelTypes"])
+    names.extend(
+        f"product_type={product_type}" for product_type in metadata["productTypes"]
+    )
     names.extend(f"brand={brand}" for brand in metadata["brands"])
     return names
 
@@ -301,6 +315,21 @@ def normalize_fuel_type(value):
     if fuel_type == "diesel":
         return "diesel"
     return fuel_type
+
+
+def normalize_product_type(value):
+    product_type = clean_text(value).lower()
+    product_type = product_type.replace("&", " and ")
+    product_type = "_".join(
+        word for word in product_type.replace("-", " ").split() if word
+    )
+    product_type = product_type.replace("v_power", "vpower")
+    product_type = product_type.replace("fuel_save", "fuelsave")
+    if product_type in {"regular", "unleaded", "gas", "gasoline"}:
+        return "gasoline"
+    if product_type in {"premium", "premium_gasoline"}:
+        return "premium"
+    return product_type
 
 
 def clean_text(value):

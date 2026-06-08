@@ -5,6 +5,7 @@ class TrainedPriceForecastModel {
     required this.modelVersion,
     required this.numericFeatures,
     required this.fuelTypes,
+    required this.productTypes,
     required this.brands,
     required this.scaler,
     required this.weights,
@@ -13,6 +14,7 @@ class TrainedPriceForecastModel {
   final String modelVersion;
   final List<String> numericFeatures;
   final List<String> fuelTypes;
+  final List<String> productTypes;
   final List<String> brands;
   final Map<String, FeatureScale> scaler;
   final Map<String, double> weights;
@@ -47,6 +49,7 @@ class TrainedPriceForecastModel {
       ),
       numericFeatures: _jsonStringList(json['numericFeatures']),
       fuelTypes: _jsonStringList(json['fuelTypes']),
+      productTypes: _jsonStringList(json['productTypes']),
       brands: _jsonStringList(json['brands']),
       scaler: scaler,
       weights: weights,
@@ -55,6 +58,7 @@ class TrainedPriceForecastModel {
 
   double predict({
     required String fuelType,
+    required String productType,
     required String brand,
     required double currentPrice,
     required double priceOneWeekAgo,
@@ -64,6 +68,7 @@ class TrainedPriceForecastModel {
     required double lng,
   }) {
     final normalizedFuelType = _trainedFuelType(fuelType);
+    final normalizedProductType = _trainedProductType(productType);
     final normalizedBrand = brand.trim().toLowerCase();
     final numeric = <String, double>{
       'current_price': currentPrice,
@@ -86,6 +91,12 @@ class TrainedPriceForecastModel {
 
     for (final option in fuelTypes) {
       features['fuel_type=$option'] = normalizedFuelType == option ? 1 : 0;
+    }
+
+    for (final option in productTypes) {
+      features['product_type=$option'] = normalizedProductType == option
+          ? 1
+          : 0;
     }
 
     for (final option in brands) {
@@ -152,6 +163,7 @@ class TrainedPriceForecastService {
     final band = regionalStats.bandFor(_forecastBandFuelType(fuelType));
     final rawPrediction = model.predict(
       fuelType: fuelType,
+      productType: _productTypeForForecastFuel(station, fuelType),
       brand: station.brand,
       currentPrice: latest.price,
       priceOneWeekAgo: previous.price,
@@ -217,6 +229,42 @@ double _trainedForecastConfidence({
 String _trainedFuelType(String fuelType) {
   final category = _forecastBandFuelType(fuelType);
   return category == 'regular' ? 'gasoline' : category;
+}
+
+String _productTypeForForecastFuel(
+  StationMarkerDetails station,
+  String fuelType,
+) {
+  if (_isFuelProductKey(fuelType)) {
+    return _trainedProductType(_fuelProductLabelFromKey(fuelType));
+  }
+
+  final brand = station.brand.trim().toLowerCase();
+  if (brand.contains('shell')) {
+    return switch (_trainedFuelType(fuelType)) {
+      'diesel' => 'shell_fuelsave_diesel',
+      'premium' => 'shell_vpower_gasoline',
+      _ => 'shell_fuelsave_gasoline',
+    };
+  }
+  return _trainedFuelType(fuelType);
+}
+
+String _trainedProductType(String value) {
+  var productType = value.trim().toLowerCase();
+  productType = productType.replaceAll('&', ' and ');
+  productType = productType.replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+  productType = productType.replaceAll(RegExp(r'_+'), '_');
+  productType = productType.replaceAll(RegExp(r'^_|_$'), '');
+  productType = productType
+      .replaceAll('v_power', 'vpower')
+      .replaceAll('fuel_save', 'fuelsave');
+  if (productType == 'regular' ||
+      productType == 'unleaded' ||
+      productType == 'gas') {
+    return 'gasoline';
+  }
+  return productType;
 }
 
 List<String> _jsonStringList(Object? value) {
