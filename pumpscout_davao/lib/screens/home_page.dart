@@ -1613,9 +1613,13 @@ class _CommunityContributionsPage extends StatefulWidget {
 
 class _CommunityContributionsPageState
     extends State<_CommunityContributionsPage> {
+  static const double _nearbyCommunityRadiusMeters = 10000;
+
   List<CommunityContribution> _items = const [];
   bool _isLoading = true;
   bool _isSavingReaction = false;
+  String _communityFilter = 'nearby';
+  geo.Position? _communityLocation;
   String? _errorMessage;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _communityReportsSubscription;
@@ -1687,6 +1691,7 @@ class _CommunityContributionsPageState
 
   Future<List<CommunityContribution>> _loadCommunityContributions() async {
     final currentUser = FirebaseAuth.instance.currentUser;
+    final location = await _locationForCommunityFilter();
     final snapshot = await FirebaseFirestore.instance
         .collection('priceReports')
         .where('status', isEqualTo: 'verified')
@@ -1705,9 +1710,14 @@ class _CommunityContributionsPageState
     final trustCache = <String, ContributorTrustBadge>{};
     final items = <CommunityContribution>[];
 
-    for (final doc in docs.take(40)) {
+    for (final doc in docs) {
       final reportData = doc.data();
       final contributorId = _stringField(reportData, 'userId');
+      if (_communityFilter == 'nearby' &&
+          !_isNearbyCommunityReport(reportData, location)) {
+        continue;
+      }
+
       final feedback =
           feedbackByReportId[doc.id] ?? const ReportFeedbackAggregate();
 
@@ -1731,7 +1741,121 @@ class _CommunityContributionsPageState
       );
     }
 
-    return items;
+    items.sort((a, b) => _compareCommunityItems(a, b, location));
+    return items.take(40).toList();
+  }
+
+  Future<geo.Position?> _locationForCommunityFilter() async {
+    if (_communityFilter != 'nearby') return _communityLocation;
+    if (_communityLocation != null) return _communityLocation;
+
+    try {
+      var permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+      }
+      if (permission == geo.LocationPermission.denied ||
+          permission == geo.LocationPermission.deniedForever) {
+        return null;
+      }
+
+      _communityLocation = await geo.Geolocator.getCurrentPosition();
+      return _communityLocation;
+    } catch (error) {
+      debugPrint('Community location load failed: $error');
+      return null;
+    }
+  }
+
+  bool _isNearbyCommunityReport(
+    Map<String, dynamic> data,
+    geo.Position? location,
+  ) {
+    if (location == null) return false;
+    final lat = _doubleField(data, 'lat');
+    final lng = _doubleField(data, 'lng');
+    if (lat == null || lng == null) return false;
+
+    return geo.Geolocator.distanceBetween(
+          location.latitude,
+          location.longitude,
+          lat,
+          lng,
+        ) <=
+        _nearbyCommunityRadiusMeters;
+  }
+
+  int _compareCommunityItems(
+    CommunityContribution a,
+    CommunityContribution b,
+    geo.Position? location,
+  ) {
+    switch (_communityFilter) {
+      case 'cheapest':
+        final priceCompare = (_lowestCommunityPrice(
+          a,
+        )).compareTo(_lowestCommunityPrice(b));
+        if (priceCompare != 0) return priceCompare;
+        return b.createdAt.compareTo(a.createdAt);
+      case 'nearby':
+        final distanceCompare = _communityDistanceMeters(
+          a,
+          location,
+        ).compareTo(_communityDistanceMeters(b, location));
+        if (distanceCompare != 0) return distanceCompare;
+        return b.createdAt.compareTo(a.createdAt);
+      case 'all':
+      case 'latest':
+      default:
+        return b.createdAt.compareTo(a.createdAt);
+    }
+  }
+
+  double _lowestCommunityPrice(CommunityContribution item) {
+    final prices = <double>[
+      ?item.gasoline,
+      ?item.diesel,
+      ?item.premium,
+    ].where((price) => price > 0).toList();
+    if (prices.isEmpty) return double.infinity;
+    return prices.reduce(math.min);
+  }
+
+  double _communityDistanceMeters(
+    CommunityContribution item,
+    geo.Position? location,
+  ) {
+    if (location == null || item.lat == 0 || item.lng == 0) {
+      return double.infinity;
+    }
+    return geo.Geolocator.distanceBetween(
+      location.latitude,
+      location.longitude,
+      item.lat,
+      item.lng,
+    );
+  }
+
+  String _communityFilterSubtitle() {
+    switch (_communityFilter) {
+      case 'nearby':
+        return _communityLocation == null
+            ? 'Nearby needs location access'
+            : 'Verified reports within 10 km';
+      case 'cheapest':
+        return 'Verified reports sorted by lowest available price';
+      case 'all':
+        return 'All verified reports across Davao';
+      case 'latest':
+      default:
+        return 'Newest verified reports first';
+    }
+  }
+
+  void _setCommunityFilter(String filter) {
+    if (_communityFilter == filter) return;
+    setState(() => _communityFilter = filter);
+    _reloadContributions();
   }
 
   Future<void> saveReaction(CommunityContribution item, String reaction) async {
@@ -2028,10 +2152,23 @@ class _CommunityContributionsPageState
     }
 
     if (_items.isEmpty) {
-      return Center(
-        child: Text(
-          'No public verified contributions yet.',
-          style: TextStyle(color: _psMutedTextColor(context)),
+      return RefreshIndicator(
+        color: _psRed,
+        onRefresh: _reloadContributions,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            _communityFilterBar(),
+            const SizedBox(height: 18),
+            Center(
+              child: Text(
+                _communityEmptyMessage(),
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _psMutedTextColor(context)),
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -2042,14 +2179,76 @@ class _CommunityContributionsPageState
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        itemCount: _items.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 12),
-        itemBuilder: (context, index) => _communityCard(_items[index]),
+        itemCount: _items.length + 1,
+        separatorBuilder: (_, index) => SizedBox(height: index == 0 ? 14 : 12),
+        itemBuilder: (context, index) {
+          if (index == 0) return _communityFilterBar();
+          return _communityCard(_items[index - 1]);
+        },
       ),
     );
   }
 
+  Widget _communityFilterBar() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'nearby', label: Text('Nearby')),
+              ButtonSegment(value: 'latest', label: Text('Latest')),
+              ButtonSegment(value: 'cheapest', label: Text('Cheapest')),
+              ButtonSegment(value: 'all', label: Text('All Davao')),
+            ],
+            selected: {_communityFilter},
+            onSelectionChanged: (selection) {
+              _setCommunityFilter(selection.first);
+            },
+            showSelectedIcon: false,
+            style: ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              textStyle: WidgetStateProperty.all(
+                const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _communityFilterSubtitle(),
+          style: TextStyle(
+            color: _psMutedTextColor(context),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _communityEmptyMessage() {
+    if (_communityFilter == 'nearby' && _communityLocation == null) {
+      return 'Allow location access to see nearby verified reports, or switch to Latest / All Davao.';
+    }
+    if (_communityFilter == 'nearby') {
+      return 'No verified community reports within 10 km yet.';
+    }
+    return 'No public verified contributions yet.';
+  }
+
+  String? _communityDistanceLabel(CommunityContribution item) {
+    if (_communityLocation == null) return null;
+    final distance = _communityDistanceMeters(item, _communityLocation);
+    if (!distance.isFinite) return null;
+    return distance >= 1000
+        ? '${(distance / 1000).toStringAsFixed(1)} km away'
+        : '${distance.round()} m away';
+  }
+
   Widget _communityCard(CommunityContribution item) {
+    final distanceLabel = _communityDistanceLabel(item);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -2079,7 +2278,11 @@ class _CommunityContributionsPageState
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'by ${item.contributorName} • ${_formatDateTime(item.createdAt)}',
+                      [
+                        'by ${item.contributorName}',
+                        ?distanceLabel,
+                        _formatDateTime(item.createdAt),
+                      ].join(' • '),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -2128,7 +2331,9 @@ class _CommunityContributionsPageState
             ],
           ),
           const SizedBox(height: 2),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: [
               _reactionButton(
                 icon: Icons.thumb_up_alt_outlined,
@@ -2138,20 +2343,26 @@ class _CommunityContributionsPageState
                 selected: item.myReaction == 'like',
                 onPressed: () => saveReaction(item, 'like'),
               ),
-              const SizedBox(width: 2),
               _reactionButton(
                 icon: Icons.thumb_down_alt_outlined,
                 label: 'Disagree',
                 selected: item.myReaction == 'disagree',
                 onPressed: () => saveReaction(item, 'disagree'),
               ),
-              const SizedBox(width: 2),
               OutlinedButton.icon(
                 onPressed: _isSavingReaction
                     ? null
                     : () => promptFeedback(item),
                 icon: const Icon(Icons.chat_bubble_outline, size: 15),
-                label: Text('Comments ${item.commentThreadCount}'),
+                label: Text(
+                  item.commentThreadCount > 0
+                      ? 'Comment ${item.commentThreadCount}'
+                      : 'Comment',
+                ),
+                style: _communityActionButtonStyle(
+                  foregroundColor: _psPrimaryTextColor(context),
+                  borderColor: _psBorderColor(context),
+                ),
               ),
             ],
           ),
@@ -2318,11 +2529,28 @@ class _CommunityContributionsPageState
       onPressed: _isSavingReaction ? null : onPressed,
       icon: Icon(icon, size: 17),
       label: Text(label),
-      style: OutlinedButton.styleFrom(
+      style: _communityActionButtonStyle(
         foregroundColor: selected ? Colors.white : _psPrimaryTextColor(context),
         backgroundColor: selected ? _psRed : null,
-        side: BorderSide(color: selected ? _psRed : _psBorderColor(context)),
+        borderColor: selected ? _psRed : _psBorderColor(context),
       ),
+    );
+  }
+
+  ButtonStyle _communityActionButtonStyle({
+    required Color foregroundColor,
+    required Color borderColor,
+    Color? backgroundColor,
+  }) {
+    return OutlinedButton.styleFrom(
+      foregroundColor: foregroundColor,
+      backgroundColor: backgroundColor,
+      side: BorderSide(color: borderColor),
+      minimumSize: const ui.Size(0, 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
     );
   }
 }
@@ -2976,25 +3204,45 @@ class _AdminDashboardPage extends StatefulWidget {
 }
 
 class _AdminDashboardPageState extends State<_AdminDashboardPage> {
+  static const int _adminContributionFetchLimit = 80;
+  static const int _adminContributionDisplayLimit = 50;
+
   String activeTab = 'pending';
   bool isWorking = false;
 
   Future<List<AdminContribution>> loadContributions(String status) async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('priceReports')
-        .where('status', isEqualTo: status)
-        .get();
-    final reports = snapshot.docs.map(AdminContribution.fromFirestore).toList()
-      ..sort((a, b) {
-        if (status == 'pending') {
-          final rankCompare = _screeningRank(
-            a.aiClassification,
-          ).compareTo(_screeningRank(b.aiClassification));
-          if (rankCompare != 0) return rankCompare;
-        }
-        return b.createdAt.compareTo(a.createdAt);
-      });
-    return reports.take(50).toList();
+    QuerySnapshot<Map<String, dynamic>> snapshot;
+    try {
+      snapshot = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('status', isEqualTo: status)
+          .orderBy('createdAt', descending: true)
+          .limit(_adminContributionFetchLimit)
+          .get();
+    } on FirebaseException catch (error) {
+      if (error.code != 'failed-precondition') rethrow;
+      debugPrint('Admin contribution optimized query needs index: $error');
+      snapshot = await FirebaseFirestore.instance
+          .collection('priceReports')
+          .where('status', isEqualTo: status)
+          .get();
+    }
+
+    final reports =
+        snapshot.docs
+            .where((doc) => doc.data()['adminArchived'] != true)
+            .map(AdminContribution.fromFirestore)
+            .toList()
+          ..sort((a, b) {
+            if (status == 'pending') {
+              final rankCompare = _screeningRank(
+                a.aiClassification,
+              ).compareTo(_screeningRank(b.aiClassification));
+              if (rankCompare != 0) return rankCompare;
+            }
+            return b.createdAt.compareTo(a.createdAt);
+          });
+    return reports.take(_adminContributionDisplayLimit).toList();
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> loadUsers() async {
@@ -3018,6 +3266,65 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
       status: 'rejected',
       rejectionReason: reason,
     );
+  }
+
+  Future<void> archiveContribution(AdminContribution report) async {
+    if (isWorking || report.status == 'pending') return;
+
+    final shouldArchive = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Archive contribution?'),
+          content: Text(
+            'This hides ${report.stationName} from the admin ${report.status} list, but keeps the record for user history, trust scores, and audit review.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: _psRed,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Archive'),
+            ),
+          ],
+        );
+      },
+    );
+    if (shouldArchive != true || !mounted) return;
+
+    final admin = FirebaseAuth.instance.currentUser;
+    if (admin == null) return;
+
+    setState(() => isWorking = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('priceReports')
+          .doc(report.id)
+          .set({
+            'adminArchived': true,
+            'adminArchivedAt': Timestamp.now(),
+            'adminArchivedBy': admin.uid,
+          }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Contribution archived.')));
+      setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Archive failed: $error')));
+    } finally {
+      if (mounted) setState(() => isWorking = false);
+    }
   }
 
   Future<void> reviewContribution(
@@ -3061,6 +3368,9 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
 
       final reviewData = <String, Object?>{
         'status': status,
+        'adminArchived': false,
+        'adminArchivedAt': FieldValue.delete(),
+        'adminArchivedBy': FieldValue.delete(),
         'reviewedAt': now,
         'reviewedBy': admin.uid,
         'reviewedByEmail': admin.email,
@@ -3225,7 +3535,7 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
                               ),
                               SizedBox(height: 3),
                               Text(
-                                'Review reports and manage PumpScout users.',
+                                'Showing latest 50 active records per tab.',
                                 style: TextStyle(
                                   color: _psMutedTextColor(context),
                                   fontWeight: FontWeight.w600,
@@ -3488,6 +3798,23 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
                   ),
                 ),
               ],
+            ),
+          ] else ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: isWorking ? null : () => archiveContribution(report),
+                icon: const Icon(Icons.archive_outlined, size: 18),
+                label: const Text('Archive'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _psPrimaryTextColor(context),
+                  side: BorderSide(color: _psBorderColor(context)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
             ),
           ],
         ],

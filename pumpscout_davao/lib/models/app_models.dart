@@ -345,6 +345,8 @@ class CommunityContribution {
     required this.brand,
     required this.createdAt,
     required this.trustBadge,
+    required this.lat,
+    required this.lng,
     this.gasoline,
     this.diesel,
     this.premium,
@@ -363,6 +365,8 @@ class CommunityContribution {
   final String stationName;
   final String brand;
   final DateTime createdAt;
+  final double lat;
+  final double lng;
   final double? gasoline;
   final double? diesel;
   final double? premium;
@@ -413,6 +417,8 @@ class CommunityContribution {
       stationName: _stringField(data, 'stationName', fallback: 'Fuel station'),
       brand: _stringField(data, 'brand'),
       createdAt: _dateTimeField(data, 'createdAt') ?? DateTime(1970),
+      lat: _doubleField(data, 'lat') ?? 0,
+      lng: _doubleField(data, 'lng') ?? 0,
       gasoline: _doubleField(data, 'gasoline'),
       diesel: _doubleField(data, 'diesel'),
       premium: _doubleField(data, 'premium'),
@@ -442,6 +448,8 @@ class CommunityContribution {
       brand: brand,
       createdAt: createdAt,
       trustBadge: trustBadge,
+      lat: lat,
+      lng: lng,
       gasoline: gasoline,
       diesel: diesel,
       premium: premium,

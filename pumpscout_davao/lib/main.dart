@@ -28,6 +28,7 @@ part 'services/cloudinary_service.dart';
 part 'services/contribution_classifier.dart';
 part 'services/regional_price_model.dart';
 part 'services/price_forecast_service.dart';
+part 'services/trained_price_forecast_service.dart';
 part 'services/contributor_trust_service.dart';
 part 'utils/geo_utils.dart';
 part 'utils/auth_errors.dart';

@@ -81,6 +81,7 @@ flutter:
     - assets/images/33rd.png
     - assets/images/tikbalang thing of fuel.png
     - assets/data/regional_price_stats.json
+    - assets/data/price_forecast_model.json
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

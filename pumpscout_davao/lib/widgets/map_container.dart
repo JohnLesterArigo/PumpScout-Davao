@@ -28,6 +28,7 @@ class _MapContainerState extends State<MapContainer> {
   List<StationPrice> firestoreStations = [];
   List<StationMarkerDetails> nearbyStationDetails = [];
   final Map<String, StationMarkerDetails> stationDetailsByAnnotationId = {};
+  final Map<String, _StationCluster> clusterByAnnotationId = {};
   final Set<String> favoriteStationKeys = {};
   final Map<String, StationMarkerDetails> savedStationDetailsByKey = {};
   StationMarkerDetails? activeRouteDestination;
@@ -421,6 +422,7 @@ class _MapContainerState extends State<MapContainer> {
     await stationLabelManager!.setTextAllowOverlap(true);
     await stationLabelManager!.setTextIgnorePlacement(true);
     stationDetailsByAnnotationId.clear();
+    clusterByAnnotationId.clear();
     nearbyStationDetails = [];
 
     var markerCount = 0;
@@ -463,6 +465,7 @@ class _MapContainerState extends State<MapContainer> {
                     cluster.centerLng,
                   ),
           );
+          clusterByAnnotationId[annotation.id] = cluster;
           stationDetailsByAnnotationId[annotation.id] = clusterDetails;
           final label = await stationLabelManager!.create(
             PointAnnotationOptions(
@@ -479,6 +482,7 @@ class _MapContainerState extends State<MapContainer> {
               symbolSortKey: 1000 + cluster.count.toDouble(),
             ),
           );
+          clusterByAnnotationId[label.id] = cluster;
           stationDetailsByAnnotationId[label.id] = clusterDetails;
           markerCount++;
         } catch (error) {
@@ -631,6 +635,7 @@ class _MapContainerState extends State<MapContainer> {
           centerLat: latSum / group.length,
           centerLng: lngSum / group.length,
           count: group.length,
+          stations: group,
         ),
       );
     }
@@ -737,7 +742,7 @@ class _MapContainerState extends State<MapContainer> {
     }
 
     if (details.brand == 'Cluster') {
-      zoomToStationCluster(details);
+      zoomToStationCluster(details, clusterByAnnotationId[annotation.id]);
       return;
     }
 
@@ -747,19 +752,35 @@ class _MapContainerState extends State<MapContainer> {
   void showStationLabelTap(PointAnnotation annotation) {
     final details = stationDetailsByAnnotationId[annotation.id];
     if (details?.brand == 'Cluster') {
-      zoomToStationCluster(details!);
+      zoomToStationCluster(details!, clusterByAnnotationId[annotation.id]);
     }
   }
 
-  Future<void> zoomToStationCluster(StationMarkerDetails details) async {
+  Future<void> zoomToStationCluster(
+    StationMarkerDetails details,
+    _StationCluster? cluster,
+  ) async {
+    final targetLat = cluster?.centerLat ?? details.lat;
+    final targetLng = cluster?.centerLng ?? details.lng;
+    final clusterStations = cluster?.stations ?? const <dynamic>[];
+    final targetZoom = math.max(currentMapZoom + 3.2, 15.2);
     await mapboxMap?.flyTo(
       CameraOptions(
-        center: Point(coordinates: Position(details.lng, details.lat)),
-        zoom: math.max(currentMapZoom + 2.2, clusterZoomThreshold + 0.8),
+        center: Point(coordinates: Position(targetLng, targetLat)),
+        zoom: targetZoom,
         pitch: 55,
         bearing: -20,
       ),
       MapAnimationOptions(duration: 650),
+    );
+
+    currentMapZoom = targetZoom;
+    if (!mounted || mapboxMap == null) return;
+
+    final loadId = ++stationLoadId;
+    await drawStationMarkers(
+      clusterStations.isNotEmpty ? clusterStations : (cachedStations ?? []),
+      loadId,
     );
   }
 
@@ -874,12 +895,9 @@ class _MapContainerState extends State<MapContainer> {
                   _priceFreshnessBadge(price!.updatedAt!),
                 ],
                 const SizedBox(height: 8),
-                if (price == null)
-                  const Text('No price data yet for this station.')
-                else
-                  ..._fuelDisplayItems(
-                    details,
-                  ).map((item) => _priceRow(item.label, item.price)),
+                ..._fuelDisplayItems(
+                  details,
+                ).map((item) => _priceRow(item.label, item.price)),
                 const SizedBox(height: 10),
                 _priceDisclaimer(),
                 const SizedBox(height: 16),
@@ -1519,6 +1537,11 @@ class _MapContainerState extends State<MapContainer> {
 
     return StatefulBuilder(
       builder: (context, setForecastState) {
+        final fuelItems = _fuelDisplayItems(details);
+        if (!fuelItems.any((item) => item.fuelType == selectedFuel)) {
+          selectedFuel = fuelItems.first.fuelType;
+        }
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1529,41 +1552,52 @@ class _MapContainerState extends State<MapContainer> {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            SegmentedButton<String>(
-              segments: [
-                ButtonSegment(
-                  value: 'gasoline',
-                  label: Text(_shortFuelLabelForStation(details, 'gasoline')),
-                ),
-                ButtonSegment(
-                  value: 'diesel',
-                  label: Text(_shortFuelLabelForStation(details, 'diesel')),
-                ),
-                ButtonSegment(
-                  value: 'premium',
-                  label: Text(_shortFuelLabelForStation(details, 'premium')),
-                ),
-              ],
-              selected: {selectedFuel},
-              onSelectionChanged: (selection) {
-                setForecastState(() => selectedFuel = selection.first);
-              },
-              showSelectedIcon: false,
-              style: ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                textStyle: WidgetStateProperty.all(
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<String>(
+                segments: [
+                  for (final item in fuelItems)
+                    ButtonSegment(
+                      value: item.fuelType,
+                      label: Text(item.shortLabel),
+                    ),
+                ],
+                selected: {selectedFuel},
+                onSelectionChanged: (selection) {
+                  setForecastState(() => selectedFuel = selection.first);
+                },
+                showSelectedIcon: false,
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: WidgetStateProperty.all(
+                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
             ),
             const SizedBox(height: 10),
             FutureBuilder<
-              ({List<PriceReport> reports, RegionalPriceStats stats})
+              ({
+                List<PriceReport> reports,
+                RegionalPriceStats stats,
+                FuelPriceForecast? trainedForecast,
+              })
             >(
               future: () async {
                 final reports = await fetchPriceReports(details);
                 final stats = await RegionalPriceModel.load();
-                return (reports: reports, stats: stats);
+                final trainedForecast =
+                    await TrainedPriceForecastService.forecastFuelPrice(
+                      reports: reports,
+                      station: details,
+                      fuelType: selectedFuel,
+                      regionalStats: stats,
+                    );
+                return (
+                  reports: reports,
+                  stats: stats,
+                  trainedForecast: trainedForecast,
+                );
               }(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1577,11 +1611,13 @@ class _MapContainerState extends State<MapContainer> {
 
                 final reports = snapshot.data?.reports ?? const <PriceReport>[];
                 final stats = snapshot.data?.stats;
-                final forecast = forecastFuelPrice(
-                  reports,
-                  selectedFuel,
-                  regionalStats: stats,
-                );
+                final forecast =
+                    snapshot.data?.trainedForecast ??
+                    forecastFuelPrice(
+                      reports,
+                      selectedFuel,
+                      regionalStats: stats,
+                    );
                 if (forecast == null) {
                   final verifiedFuelReportCount = reports
                       .where(
@@ -1860,15 +1896,13 @@ class _MapContainerState extends State<MapContainer> {
   void showPriceReportSheet(StationMarkerDetails details) {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final gasolineController = TextEditingController(
-      text: details.price?.gasoline?.toStringAsFixed(2) ?? '',
-    );
-    final dieselController = TextEditingController(
-      text: details.price?.diesel?.toStringAsFixed(2) ?? '',
-    );
-    final premiumController = TextEditingController(
-      text: details.price?.premium?.toStringAsFixed(2) ?? '',
-    );
+    final reportItems = _fuelDisplayItems(details);
+    final priceControllers = {
+      for (final item in reportItems)
+        item.fuelType: TextEditingController(
+          text: item.price?.toStringAsFixed(2) ?? '',
+        ),
+    };
     picker.XFile? selectedImage;
     var isSubmitting = false;
 
@@ -1897,18 +1931,11 @@ class _MapContainerState extends State<MapContainer> {
                     const SizedBox(height: 4),
                     Text(details.name),
                     const SizedBox(height: 16),
-                    _reportPriceField(
-                      controller: gasolineController,
-                      label: _fuelLabelForStation(details, 'gasoline'),
-                    ),
-                    _reportPriceField(
-                      controller: dieselController,
-                      label: _fuelLabelForStation(details, 'diesel'),
-                    ),
-                    _reportPriceField(
-                      controller: premiumController,
-                      label: _fuelLabelForStation(details, 'premium'),
-                    ),
+                    for (final item in reportItems)
+                      _reportPriceField(
+                        controller: priceControllers[item.fuelType]!,
+                        label: item.label,
+                      ),
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: isSubmitting
@@ -1950,13 +1977,29 @@ class _MapContainerState extends State<MapContainer> {
                                 setSheetState(() {
                                   isSubmitting = true;
                                 });
+                                final submittedPrices = {
+                                  for (final item in reportItems)
+                                    item.fuelType: _parsePrice(
+                                      priceControllers[item.fuelType]!.text,
+                                    ),
+                                };
                                 final success = await submitPriceReport(
                                   details: details,
-                                  gasoline: _parsePrice(
-                                    gasolineController.text,
+                                  gasoline: _categoryPriceFromSubmitted(
+                                    submittedPrices,
+                                    'gasoline',
                                   ),
-                                  diesel: _parsePrice(dieselController.text),
-                                  premium: _parsePrice(premiumController.text),
+                                  diesel: _categoryPriceFromSubmitted(
+                                    submittedPrices,
+                                    'diesel',
+                                  ),
+                                  premium: _categoryPriceFromSubmitted(
+                                    submittedPrices,
+                                    'premium',
+                                  ),
+                                  fuelProducts: _productPricesFromSubmitted(
+                                    submittedPrices,
+                                  ),
                                   image: selectedImage,
                                 );
                                 if (!mounted) return;
@@ -2010,10 +2053,16 @@ class _MapContainerState extends State<MapContainer> {
     required double? gasoline,
     required double? diesel,
     required double? premium,
+    required Map<String, double> fuelProducts,
     required picker.XFile? image,
   }) async {
     if (!_canReportPrice(details)) return false;
-    if (gasoline == null && diesel == null && premium == null) return false;
+    if (gasoline == null &&
+        diesel == null &&
+        premium == null &&
+        fuelProducts.isEmpty) {
+      return false;
+    }
 
     try {
       final now = DateTime.now();
@@ -2069,6 +2118,7 @@ class _MapContainerState extends State<MapContainer> {
         'gasoline': gasoline,
         'diesel': diesel,
         'premium': premium,
+        'fuelProducts': fuelProducts,
         'status': 'pending',
         'photoProvider': photoUrl == null ? null : 'cloudinary',
         'photoUrl': photoUrl,
@@ -2966,11 +3016,34 @@ class _MapContainerState extends State<MapContainer> {
   double? _fuelPrice(StationPrice? price, String fuelType) {
     if (price == null) return null;
 
-    return switch (fuelType) {
+    if (_isFuelProductKey(fuelType)) {
+      final label = _fuelProductLabelFromKey(fuelType);
+      final productPrice =
+          price.fuelProducts[label] ?? _fuelProductAliasPrice(price, label);
+      if (productPrice != null && productPrice > 0) return productPrice;
+
+      return switch (_fuelCategoryForProductLabel(label)) {
+        'diesel' => price.diesel,
+        'premium' => price.premium,
+        _ => price.gasoline,
+      };
+    }
+
+    final categoryPrice = switch (fuelType) {
       'diesel' => price.diesel,
       'premium' => price.premium,
       _ => price.gasoline,
     };
+    if (categoryPrice != null && categoryPrice > 0) return categoryPrice;
+
+    for (final entry in price.fuelProducts.entries) {
+      if (_fuelCategoryForProductLabel(entry.key) == fuelType &&
+          entry.value > 0) {
+        return entry.value;
+      }
+    }
+
+    return null;
   }
 
   String _fuelLabel(String fuelType) {
@@ -2983,37 +3056,53 @@ class _MapContainerState extends State<MapContainer> {
 
   List<FuelDisplayItem> _fuelDisplayItems(StationMarkerDetails details) {
     final price = details.price;
-    if (price == null) return const [];
+    final catalog = _fuelProductCatalog(details);
+
+    if (catalog.isNotEmpty) {
+      return [
+        for (final label in catalog)
+          FuelDisplayItem(
+            fuelType: _fuelProductKey(label),
+            label: label,
+            shortLabel: _shortProductLabelForStation(details, label),
+            price: _fuelPrice(price, _fuelProductKey(label)),
+          ),
+      ];
+    }
 
     return [
       FuelDisplayItem(
         fuelType: 'gasoline',
         label: _fuelLabelForStation(details, 'gasoline'),
         shortLabel: _shortFuelLabelForStation(details, 'gasoline'),
-        price: price.gasoline,
+        price: _fuelPrice(price, 'gasoline'),
       ),
       FuelDisplayItem(
         fuelType: 'diesel',
         label: _fuelLabelForStation(details, 'diesel'),
         shortLabel: _shortFuelLabelForStation(details, 'diesel'),
-        price: price.diesel,
+        price: _fuelPrice(price, 'diesel'),
       ),
       FuelDisplayItem(
         fuelType: 'premium',
         label: _fuelLabelForStation(details, 'premium'),
         shortLabel: _shortFuelLabelForStation(details, 'premium'),
-        price: price.premium,
+        price: _fuelPrice(price, 'premium'),
       ),
     ];
   }
 
   String _fuelLabelForStation(StationMarkerDetails details, String fuelType) {
+    if (_isFuelProductKey(fuelType)) {
+      return _fuelProductLabelFromKey(fuelType);
+    }
+
     final brand = _normalizedBrandForLabels(details);
 
     if (brand.contains('shell')) {
       return switch (fuelType) {
         'diesel' => 'Shell FuelSave Diesel',
-        'premium' => 'Shell VP Gasoline',
+        'premium' => 'Shell V-Power Gasoline',
         _ => 'Shell FuelSave Gasoline',
       };
     }
@@ -3092,6 +3181,124 @@ class _MapContainerState extends State<MapContainer> {
     }
 
     return _fuelLabel(fuelType);
+  }
+
+  List<String> _fuelProductCatalog(StationMarkerDetails details) {
+    final brand = _normalizedBrandForLabels(details);
+    if (brand.contains('shell')) {
+      return const [
+        'Shell FuelSave Gasoline',
+        'Shell FuelSave Diesel',
+        'Shell V-Power Gasoline',
+        'Shell V-Power Diesel',
+      ];
+    }
+    return const <String>[];
+  }
+
+  String _fuelProductKey(String label) => 'product:$label';
+
+  bool _isFuelProductKey(String fuelType) => fuelType.startsWith('product:');
+
+  String _fuelProductLabelFromKey(String fuelType) {
+    return _isFuelProductKey(fuelType)
+        ? fuelType.substring('product:'.length)
+        : fuelType;
+  }
+
+  String _fuelCategoryForProductLabel(String label) {
+    final normalized = label.toLowerCase();
+    if (normalized.contains('diesel')) return 'diesel';
+    if (normalized.contains('v-power') ||
+        normalized.contains('vp gasoline') ||
+        normalized.contains('premium') ||
+        normalized.contains('platinum') ||
+        normalized.contains('xcs') ||
+        normalized.contains('extreme 95')) {
+      return 'premium';
+    }
+    return 'gasoline';
+  }
+
+  double? _fuelProductAliasPrice(StationPrice price, String canonicalLabel) {
+    final targetAlias = _fuelProductAliasKey(canonicalLabel);
+    for (final entry in price.fuelProducts.entries) {
+      if (_fuelProductAliasKey(entry.key) == targetAlias && entry.value > 0) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  String _fuelProductAliasKey(String label) {
+    var normalized = label.toLowerCase();
+    normalized = normalized.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+    normalized = normalized
+        .replaceAll('shell', '')
+        .replaceAll('fuel save', 'fuelsave')
+        .replaceAll('fs ', 'fuelsave ')
+        .replaceAll('v power', 'vpower')
+        .replaceAll('vp ', 'vpower ')
+        .trim();
+
+    final isDiesel = normalized.contains('diesel');
+    final isVPower =
+        normalized.contains('vpower') || normalized.contains('vpow');
+    final isFuelSave =
+        normalized.contains('fuelsave') ||
+        normalized == 'fs' ||
+        normalized.startsWith('fs ');
+
+    if (isDiesel && isVPower) return 'shell_vpower_diesel';
+    if (isDiesel && isFuelSave) return 'shell_fuelsave_diesel';
+    if (!isDiesel && isVPower) return 'shell_vpower_gasoline';
+    if (!isDiesel && isFuelSave) return 'shell_fuelsave_gasoline';
+    return normalized.replaceAll(' ', '_');
+  }
+
+  String _shortProductLabelForStation(
+    StationMarkerDetails details,
+    String label,
+  ) {
+    final brand = _brandNameForShortLabels(details);
+    if (brand.isEmpty) return label;
+
+    return label
+        .replaceFirst(RegExp('^$brand\\s+', caseSensitive: false), '')
+        .trim();
+  }
+
+  double? _categoryPriceFromSubmitted(
+    Map<String, double?> submittedPrices,
+    String category,
+  ) {
+    final direct = submittedPrices[category];
+    if (direct != null && direct > 0) return direct;
+
+    for (final entry in submittedPrices.entries) {
+      final price = entry.value;
+      if (price == null || price <= 0 || !_isFuelProductKey(entry.key)) {
+        continue;
+      }
+      final label = _fuelProductLabelFromKey(entry.key);
+      if (_fuelCategoryForProductLabel(label) == category) return price;
+    }
+
+    return null;
+  }
+
+  Map<String, double> _productPricesFromSubmitted(
+    Map<String, double?> submittedPrices,
+  ) {
+    final productPrices = <String, double>{};
+    for (final entry in submittedPrices.entries) {
+      final price = entry.value;
+      if (price == null || price <= 0 || !_isFuelProductKey(entry.key)) {
+        continue;
+      }
+      productPrices[_fuelProductLabelFromKey(entry.key)] = price;
+    }
+    return productPrices;
   }
 
   String _shortFuelLabelForStation(
@@ -3257,11 +3464,13 @@ class _StationCluster {
     required this.centerLat,
     required this.centerLng,
     required this.count,
+    required this.stations,
   });
 
   final double centerLat;
   final double centerLng;
   final int count;
+  final List<dynamic> stations;
 }
 
 class _FuelConsumptionProfile {
