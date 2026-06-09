@@ -1,37 +1,41 @@
 part of '../main.dart';
 
-Future<List<dynamic>> fetchGasStations(double lat, double lng) async {
+Future<List<dynamic>> fetchGasStations(
+  double lat,
+  double lng, {
+  int radiusMeters = stationDemoRadiusMeters,
+}) async {
   final query =
       """
   [out:json][timeout:12];
   (
     node
       ["amenity"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     way
       ["amenity"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     relation
       ["amenity"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     node
       ["shop"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     way
       ["shop"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     relation
       ["shop"="fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     node
       ["fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     way
       ["fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
     relation
       ["fuel"]
-      (around:$stationDemoRadiusMeters,$lat,$lng);
+      (around:$radiusMeters,$lat,$lng);
   );
   out center;
   """;

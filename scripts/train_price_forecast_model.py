@@ -11,7 +11,7 @@ from pathlib import Path
 DEFAULT_INPUT = Path("data/training/PumpScout_Davao_Synthetic_fuel_prices.csv")
 DEFAULT_OUTPUT = Path("data/training/price_forecast_model.json")
 
-NUMERIC_FEATURES = [
+NUMERIC_FEATURES = [                                        
     "current_price",
     "price_1_week_ago",
     "price_2_weeks_ago",

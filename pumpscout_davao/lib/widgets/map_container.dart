@@ -18,6 +18,7 @@ class _MapContainerState extends State<MapContainer> {
   static const double clusterZoomThreshold = 13.4;
   static const int maxVisibleStationMarkers = 160;
   static const int maxVisibleClusterMarkers = 80;
+  static const int maxViewportStationRadiusMeters = 45000;
 
   MapboxMap? mapboxMap;
   CircleAnnotationManager? stationAnnotationManager;
@@ -37,6 +38,10 @@ class _MapContainerState extends State<MapContainer> {
   int stationLoadId = 0;
   double currentMapZoom = 16;
   Timer? markerClusterDebounce;
+  Timer? stationViewportDebounce;
+  double? lastRequestedMapLat;
+  double? lastRequestedMapLng;
+  double? lastRequestedMapZoom;
 
   String get mapStyleUri =>
       widget.isDarkMode ? MapboxStyles.DARK : MapboxStyles.MAPBOX_STREETS;
@@ -51,6 +56,7 @@ class _MapContainerState extends State<MapContainer> {
   void dispose() {
     locationSubscription?.cancel();
     markerClusterDebounce?.cancel();
+    stationViewportDebounce?.cancel();
     super.dispose();
   }
 
@@ -259,7 +265,10 @@ class _MapContainerState extends State<MapContainer> {
             distanceFilter: 1200,
           ),
         ).listen((location) {
-          refreshForLocation(location, moveCamera: false, useCache: true);
+          currentLocation = location;
+          if (isRouteActive) {
+            refreshForLocation(location, moveCamera: false, useCache: false);
+          }
         });
   }
 
@@ -275,6 +284,43 @@ class _MapContainerState extends State<MapContainer> {
       if (!mounted || cachedStations == null || mapboxMap == null) return;
       final loadId = ++stationLoadId;
       drawStationMarkers(cachedStations!, loadId);
+    });
+  }
+
+  void handleMapCameraChanged(CameraState cameraState) {
+    handleMapZoomChanged(cameraState.zoom);
+    if (isRouteActive) return;
+
+    final coordinates = cameraState.center.coordinates;
+    final lat = coordinates.lat.toDouble();
+    final lng = coordinates.lng.toDouble();
+    final radiusMeters = _visibleStationRadiusMeters(lat);
+
+    final lastLat = lastRequestedMapLat;
+    final lastLng = lastRequestedMapLng;
+    final lastZoom = lastRequestedMapZoom;
+    if (lastLat != null && lastLng != null && lastZoom != null) {
+      final movedMeters = geo.Geolocator.distanceBetween(
+        lastLat,
+        lastLng,
+        lat,
+        lng,
+      );
+      final zoomDelta = (cameraState.zoom - lastZoom).abs();
+      final moveThreshold = math.min(radiusMeters * 0.2, 2500).toDouble();
+      if (movedMeters < moveThreshold && zoomDelta < 0.35) {
+        return;
+      }
+    }
+
+    stationViewportDebounce?.cancel();
+    stationViewportDebounce = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted || mapboxMap == null || isRouteActive) return;
+      lastRequestedMapLat = lat;
+      lastRequestedMapLng = lng;
+      lastRequestedMapZoom = cameraState.zoom;
+      final loadId = ++stationLoadId;
+      addStationsFromAPI(lat, lng, loadId, radiusMeters: radiusMeters);
     });
   }
 
@@ -306,6 +352,7 @@ class _MapContainerState extends State<MapContainer> {
     }
 
     if (moveCamera) {
+      currentMapZoom = 15;
       await mapboxMap?.setCamera(
         CameraOptions(
           center: Point(
@@ -318,33 +365,65 @@ class _MapContainerState extends State<MapContainer> {
       );
     }
 
-    if (useCache && cachedStations != null) {
+    if (useCache && cachedStations != null && cachedStations!.isNotEmpty) {
       await drawStationMarkers(cachedStations!, loadId);
       return;
     }
 
-    await addStationsFromAPI(location.latitude, location.longitude, loadId);
+    lastRequestedMapLat = location.latitude;
+    lastRequestedMapLng = location.longitude;
+    lastRequestedMapZoom = currentMapZoom;
+    await addStationsFromAPI(
+      location.latitude,
+      location.longitude,
+      loadId,
+      radiusMeters: _visibleStationRadiusMeters(location.latitude),
+    );
   }
 
-  Future<void> addStationsFromAPI(double lat, double lng, int loadId) async {
+  Future<void> addStationsFromAPI(
+    double lat,
+    double lng,
+    int loadId, {
+    int? radiusMeters,
+  }) async {
     if (mapboxMap == null) return;
 
+    final queryRadius = radiusMeters ?? stationDemoRadiusMeters;
     firestoreStations = await fetchStationPrices();
-    final pricedStations = _firestoreStationMapsNear(lat, lng);
+    final pricedStations = _firestoreStationMapsNear(
+      lat,
+      lng,
+      radiusMeters: queryRadius,
+    );
     if (pricedStations.isNotEmpty && cachedStations == null) {
       cachedStations = pricedStations;
       await drawStationMarkers(pricedStations, loadId);
     }
 
-    final liveStations = await fetchGasStations(lat, lng);
-    final stations = _mergeStationSources(liveStations, pricedStations);
+    final liveStations = await fetchGasStations(
+      lat,
+      lng,
+      radiusMeters: queryRadius,
+    );
+    final stations = _visibleStationsNear(
+      _mergeStationSources(liveStations, pricedStations),
+      lat,
+      lng,
+      queryRadius,
+    );
     debugPrint(
       'Overpass returned ${liveStations.length} raw fuel station results',
     );
     debugPrint('Firestore returned ${firestoreStations.length} price records');
-    debugPrint('Drawing ${stations.length} merged station markers');
+    debugPrint(
+      'Drawing ${stations.length} visible station markers within ${queryRadius}m',
+    );
     if (!mounted || loadId != stationLoadId || mapboxMap == null) return;
-    if (liveStations.isEmpty && cachedStations != null) {
+    if (liveStations.isEmpty &&
+        stations.isEmpty &&
+        cachedStations != null &&
+        cachedStations!.isNotEmpty) {
       debugPrint('Keeping cached station markers because refresh was empty');
       return;
     }
@@ -353,7 +432,44 @@ class _MapContainerState extends State<MapContainer> {
     await drawStationMarkers(stations, loadId);
   }
 
-  List<dynamic> _firestoreStationMapsNear(double lat, double lng) {
+  int _visibleStationRadiusMeters(double centerLat) {
+    final size = MediaQuery.maybeSizeOf(context);
+    final width = size?.width ?? 420;
+    final height = size?.height ?? 760;
+    final metersPerPixel =
+        156543.03392 *
+        math.cos(centerLat * math.pi / 180) /
+        math.pow(2, currentMapZoom);
+    final halfDiagonalPixels = math.sqrt(width * width + height * height) / 2;
+    final visibleRadius = halfDiagonalPixels * metersPerPixel * 2.2;
+    return visibleRadius.clamp(900, maxViewportStationRadiusMeters).round();
+  }
+
+  List<dynamic> _visibleStationsNear(
+    List<dynamic> stations,
+    double centerLat,
+    double centerLng,
+    int radiusMeters,
+  ) {
+    return stations.where((station) {
+      final lat = _stationLatitude(station);
+      final lng = _stationLongitude(station);
+      if (lat == null || lng == null) return false;
+      final distance = geo.Geolocator.distanceBetween(
+        centerLat,
+        centerLng,
+        lat,
+        lng,
+      );
+      return distance <= radiusMeters;
+    }).toList();
+  }
+
+  List<dynamic> _firestoreStationMapsNear(
+    double lat,
+    double lng, {
+    int radiusMeters = stationDemoRadiusMeters,
+  }) {
     return firestoreStations
         .where((station) {
           if (station.lat == 0 || station.lng == 0) return false;
@@ -363,7 +479,7 @@ class _MapContainerState extends State<MapContainer> {
             station.lat,
             station.lng,
           );
-          return distance <= stationDemoRadiusMeters;
+          return distance <= radiusMeters;
         })
         .map(
           (station) => {
@@ -3541,7 +3657,7 @@ class _MapContainerState extends State<MapContainer> {
             startLocationUpdates();
           },
           onCameraChangeListener: (event) {
-            handleMapZoomChanged(event.cameraState.zoom);
+            handleMapCameraChanged(event.cameraState);
           },
           onStyleLoadedListener: (_) async {
             stationAnnotationManager = null;
