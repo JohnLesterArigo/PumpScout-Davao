@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,6 +39,9 @@ const String accessToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
 
 const String cloudinaryCloudName = 'dftodunis';
 const String cloudinaryUploadPreset = 'pumpscout_reports';
+const String firebaseRealtimeDatabaseUrl =
+    'https://pumpscout-davao-default-rtdb.asia-southeast1.firebasedatabase.app';
+const String demoHardwareStationId = '1ab26M1Oe1CkO02Tayee';
 const int stationDemoRadiusMeters = 20000;
 
 bool get isCloudinaryConfigured =>

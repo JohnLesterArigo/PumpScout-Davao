@@ -875,6 +875,8 @@ class _MapContainerState extends State<MapContainer> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                _stationCrowdPanel(details),
+                const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
@@ -908,6 +910,155 @@ class _MapContainerState extends State<MapContainer> {
         );
       },
     );
+  }
+
+  Widget _stationCrowdPanel(StationMarkerDetails details) {
+    final stationId = details.price?.id;
+    if (stationId == null || stationId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final realtimeDatabase = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: firebaseRealtimeDatabaseUrl,
+    );
+    final realtimeStationId = _realtimeCrowdStationId(details);
+
+    return StreamBuilder<DatabaseEvent>(
+      stream: realtimeDatabase.ref('stationCrowd/$realtimeStationId').onValue,
+      builder: (context, snapshot) {
+        final realtimeCrowd = _crowdFromRealtimeSnapshot(
+          stationId: realtimeStationId,
+          snapshot: snapshot.data,
+        );
+
+        if (realtimeCrowd != null) {
+          return _crowdStatusCard(context, realtimeCrowd);
+        }
+
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('stationCrowd')
+              .doc(stationId)
+              .snapshots(),
+          builder: (context, firestoreSnapshot) {
+            if (!firestoreSnapshot.hasData ||
+                firestoreSnapshot.data?.exists != true) {
+              return const SizedBox.shrink();
+            }
+
+            final crowd = StationCrowdStatus.fromFirestore(
+              firestoreSnapshot.data!,
+            );
+            return _crowdStatusCard(context, crowd);
+          },
+        );
+      },
+    );
+  }
+
+  String _realtimeCrowdStationId(StationMarkerDetails details) {
+    final stationId = details.price?.id;
+    final name = details.name.trim().toLowerCase();
+    final brand = details.brand.trim().toLowerCase();
+
+    if (brand == 'petron' && name == 'petron') {
+      return demoHardwareStationId;
+    }
+
+    return stationId ?? demoHardwareStationId;
+  }
+
+  StationCrowdStatus? _crowdFromRealtimeSnapshot({
+    required String stationId,
+    required DatabaseEvent? snapshot,
+  }) {
+    final value = snapshot?.snapshot.value;
+    if (value is! Map) return null;
+
+    final data = <String, dynamic>{};
+    for (final entry in value.entries) {
+      data[entry.key.toString()] = entry.value;
+    }
+
+    return StationCrowdStatus.fromRealtimeDatabase(
+      stationId: stationId,
+      data: data,
+    );
+  }
+
+  Widget _crowdStatusCard(BuildContext context, StationCrowdStatus crowd) {
+    final config = _crowdStatusConfig(crowd.computedStatus);
+    final percent = (crowd.occupancyRatio * 100).round().clamp(0, 100);
+    final countText = crowd.capacity > 0
+        ? '${crowd.currentCount} / ${crowd.capacity} vehicles • $percent% capacity'
+        : '${crowd.currentCount} vehicles detected';
+    final updatedText = crowd.updatedAt == null
+        ? ''
+        : ' • ${_formatDateTime(crowd.updatedAt!)}';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: config.color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: config.color.withValues(alpha: 0.32)),
+      ),
+      child: Row(
+        children: [
+          Icon(config.icon, color: config.color, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  config.label,
+                  style: TextStyle(
+                    color: config.color,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$countText$updatedText',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  _CrowdStatusConfig _crowdStatusConfig(String status) {
+    switch (status) {
+      case 'crowded':
+        return const _CrowdStatusConfig(
+          label: 'Crowded',
+          icon: Icons.groups_2_outlined,
+          color: Color(0xFFD92D20),
+        );
+      case 'moderate':
+        return const _CrowdStatusConfig(
+          label: 'Moderate traffic',
+          icon: Icons.group_outlined,
+          color: Color(0xFFB54708),
+        );
+      case 'not_crowded':
+      default:
+        return const _CrowdStatusConfig(
+          label: 'Not crowded',
+          icon: Icons.check_circle_outline,
+          color: Color(0xFF168A4A),
+        );
+    }
   }
 
   void showNearbyStationsPanel() {
@@ -3471,6 +3622,18 @@ class _StationCluster {
   final double centerLng;
   final int count;
   final List<dynamic> stations;
+}
+
+class _CrowdStatusConfig {
+  const _CrowdStatusConfig({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
 }
 
 class _FuelConsumptionProfile {

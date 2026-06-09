@@ -44,6 +44,93 @@ class StationPrice {
   }
 }
 
+class StationCrowdStatus {
+  const StationCrowdStatus({
+    required this.stationId,
+    required this.stationName,
+    required this.currentCount,
+    required this.capacity,
+    required this.status,
+    this.updatedAt,
+  });
+
+  final String stationId;
+  final String stationName;
+  final int currentCount;
+  final int capacity;
+  final String status;
+  final DateTime? updatedAt;
+
+  double get occupancyRatio {
+    if (capacity <= 0) return 0;
+    return (currentCount / capacity).clamp(0, 1);
+  }
+
+  String get computedStatus {
+    if (occupancyRatio >= 0.8) return 'crowded';
+    if (occupancyRatio >= 0.5) return 'moderate';
+    if (status.trim().isNotEmpty) return status.trim();
+    return 'not_crowded';
+  }
+
+  factory StationCrowdStatus.fromFirestore(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? const <String, dynamic>{};
+    return StationCrowdStatus(
+      stationId: _stringField(data, 'stationId', fallback: doc.id),
+      stationName: _stringField(data, 'stationName', fallback: 'Fuel station'),
+      currentCount: _crowdIntField(data, 'currentCount'),
+      capacity: _crowdIntField(data, 'capacity'),
+      status: _stringField(data, 'status'),
+      updatedAt: _dateTimeField(data, 'updatedAt'),
+    );
+  }
+
+  factory StationCrowdStatus.fromRealtimeDatabase({
+    required String stationId,
+    required Map<String, dynamic> data,
+  }) {
+    return StationCrowdStatus(
+      stationId: _stringField(data, 'stationId', fallback: stationId),
+      stationName: _stringField(data, 'stationName', fallback: 'Fuel station'),
+      currentCount: _crowdIntField(data, 'currentCount'),
+      capacity: _crowdIntField(data, 'capacity'),
+      status: _stringField(data, 'status'),
+      updatedAt: _realtimeDateTimeField(data, 'updatedAt'),
+    );
+  }
+}
+
+int _crowdIntField(Map<String, dynamic> data, String key) {
+  final direct = _doubleField(data, key);
+  if (direct != null) return direct.round();
+
+  final normalizedKey = key.toLowerCase();
+  for (final entry in data.entries) {
+    if (entry.key.trim().toLowerCase() != normalizedKey) continue;
+    final value = entry.value;
+    if (value is num) return value.round();
+    if (value is String) {
+      return double.tryParse(value.trim().replaceAll(',', ''))?.round() ?? 0;
+    }
+  }
+  return 0;
+}
+
+DateTime? _realtimeDateTimeField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is DateTime) return value;
+  if (value is String) return DateTime.tryParse(value.trim());
+  if (value is num) {
+    final raw = value.toInt();
+    if (raw <= 0) return null;
+    final milliseconds = raw < 10000000000 ? raw * 1000 : raw;
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+  return _dateTimeField(data, key);
+}
+
 class PriceReport {
   const PriceReport({
     required this.stationId,
