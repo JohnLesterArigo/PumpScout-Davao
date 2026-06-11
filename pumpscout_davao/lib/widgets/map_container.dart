@@ -33,8 +33,11 @@ class _MapContainerState extends State<MapContainer> {
   final Set<String> favoriteStationKeys = {};
   final Map<String, StationMarkerDetails> savedStationDetailsByKey = {};
   StationMarkerDetails? activeRouteDestination;
+  Map<String, dynamic>? activeRouteGeoJson;
   _RouteDashboardData? activeRouteDashboard;
   bool isRouteActive = false;
+  bool isNavigationFollowing = false;
+  bool hasCenteredOnUserLocation = false;
   int stationLoadId = 0;
   double currentMapZoom = 16;
   Timer? markerClusterDebounce;
@@ -237,15 +240,38 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
-  Future<void> moveToCurrentLocation() async {
+  Future<geo.Position?> _getFreshCurrentLocation({
+    bool allowCachedFallback = false,
+  }) async {
     bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
+    if (!serviceEnabled) return null;
 
     final permission = await geo.Geolocator.requestPermission();
-    if (permission == geo.LocationPermission.denied) return;
-    if (permission == geo.LocationPermission.deniedForever) return;
+    if (permission == geo.LocationPermission.denied) return null;
+    if (permission == geo.LocationPermission.deniedForever) return null;
 
-    final location = await geo.Geolocator.getCurrentPosition();
+    try {
+      final location = await geo.Geolocator.getCurrentPosition(
+        desiredAccuracy: geo.LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 12),
+      );
+      currentLocation = location;
+      return location;
+    } catch (error) {
+      debugPrint('Current location lookup failed: $error');
+      return allowCachedFallback ? currentLocation : null;
+    }
+  }
+
+  Future<void> moveToCurrentLocation() async {
+    final location = await _getFreshCurrentLocation();
+    if (location == null) {
+      _showSimpleMapMessage(
+        'Could not get your live GPS location. Turn on Location/GPS and try again.',
+      );
+      return;
+    }
+
     await refreshForLocation(location, moveCamera: true, useCache: true);
   }
 
@@ -262,10 +288,14 @@ class _MapContainerState extends State<MapContainer> {
         geo.Geolocator.getPositionStream(
           locationSettings: const geo.LocationSettings(
             accuracy: geo.LocationAccuracy.high,
-            distanceFilter: 1200,
+            distanceFilter: 10,
           ),
         ).listen((location) {
           currentLocation = location;
+          if (!hasCenteredOnUserLocation && !isRouteActive) {
+            refreshForLocation(location, moveCamera: true, useCache: true);
+            return;
+          }
           if (isRouteActive) {
             refreshForLocation(location, moveCamera: false, useCache: false);
           }
@@ -347,11 +377,15 @@ class _MapContainerState extends State<MapContainer> {
         return;
       }
 
-      await focusRouteFromCurrentLocation(destination);
+      if (isNavigationFollowing || moveCamera) {
+        isNavigationFollowing = true;
+        await focusNavigationFromCurrentLocation(destination);
+      }
       return;
     }
 
     if (moveCamera) {
+      hasCenteredOnUserLocation = true;
       currentMapZoom = 15;
       await mapboxMap?.setCamera(
         CameraOptions(
@@ -2157,12 +2191,31 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   bool _canReportPrice(StationMarkerDetails details) {
-    return true;
+    final distanceMeters = details.distanceMeters;
+    return distanceMeters != null &&
+        distanceMeters <= priceReportMaxDistanceMeters;
+  }
+
+  String? _priceReportRestrictionMessage(StationMarkerDetails details) {
+    final distanceMeters = details.distanceMeters;
+    if (distanceMeters == null) {
+      return 'Turn on location so PumpScout can verify you are within 3 km of this station.';
+    }
+    if (distanceMeters > priceReportMaxDistanceMeters) {
+      return 'You need to be within 3 km of this station to report updated prices.';
+    }
+    return null;
   }
 
   void showPriceReportSheet(StationMarkerDetails details) {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
+    final restrictionMessage = _priceReportRestrictionMessage(details);
+    if (restrictionMessage != null) {
+      messenger.showSnackBar(SnackBar(content: Text(restrictionMessage)));
+      return;
+    }
+
     final reportItems = _fuelDisplayItems(details);
     final priceControllers = {
       for (final item in reportItems)
@@ -2491,10 +2544,16 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   Future<void> showInAppRoute(StationMarkerDetails details) async {
-    final origin = currentLocation;
-    if (origin == null || mapboxMap == null) return;
+    final navigator = Navigator.of(context);
+    final origin = await _getFreshCurrentLocation();
+    if (origin == null || mapboxMap == null) {
+      _showSimpleMapMessage(
+        'Could not start navigation because your live GPS location is unavailable. Turn on Location/GPS and try again.',
+      );
+      return;
+    }
 
-    Navigator.of(context).pop();
+    navigator.pop();
 
     final route = await fetchDrivingRoute(
       originLat: origin.latitude,
@@ -2505,22 +2564,42 @@ class _MapContainerState extends State<MapContainer> {
     if (!mounted || route == null) return;
 
     await drawRoute(route);
-    await focusRouteFromCurrentLocation(details);
+    if (mounted) {
+      setState(() {
+        activeRouteDestination = details;
+        activeRouteGeoJson = route;
+        isRouteActive = true;
+        isNavigationFollowing = true;
+      });
+    }
+    await focusNavigationFromCurrentLocation(
+      details,
+      routeGeoJson: route,
+      originOverride: origin,
+    );
     await showTrafficRouteSummary(
       route,
       destinationName: _stationTitle(details),
     );
-    if (mounted) {
-      setState(() {
-        activeRouteDestination = details;
-        isRouteActive = true;
-      });
-    }
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await focusNavigationFromCurrentLocation(
+      details,
+      routeGeoJson: route,
+      originOverride: origin,
+    );
   }
 
-  Future<void> showRouteToPlace(DestinationPlace place) async {
-    final origin = currentLocation;
-    if (origin == null || mapboxMap == null) return;
+  Future<void> showRouteToPlace(
+    DestinationPlace place, {
+    bool startNavigation = false,
+  }) async {
+    final origin = await _getFreshCurrentLocation();
+    if (origin == null || mapboxMap == null) {
+      _showSimpleMapMessage(
+        'Could not start navigation because your live GPS location is unavailable. Turn on Location/GPS and try again.',
+      );
+      return;
+    }
 
     final route = await fetchDrivingRoute(
       originLat: origin.latitude,
@@ -2539,14 +2618,26 @@ class _MapContainerState extends State<MapContainer> {
     );
 
     await drawRoute(route);
-    await focusRouteFromCurrentLocation(destination);
-    await showTrafficRouteSummary(route, destinationName: place.name);
     if (mounted) {
       setState(() {
         activeRouteDestination = destination;
+        activeRouteGeoJson = route;
         isRouteActive = true;
+        isNavigationFollowing = true;
       });
     }
+    await focusNavigationFromCurrentLocation(
+      destination,
+      routeGeoJson: route,
+      originOverride: origin,
+    );
+    await showTrafficRouteSummary(route, destinationName: place.name);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await focusNavigationFromCurrentLocation(
+      destination,
+      routeGeoJson: route,
+      originOverride: origin,
+    );
   }
 
   Future<void> showCheapestDetourAnalysis(DestinationPlace place) async {
@@ -2815,7 +2906,7 @@ class _MapContainerState extends State<MapContainer> {
     );
 
     await drawRoute(detourRoute);
-    await focusRouteFromCurrentLocation(station);
+    await focusRouteFromCurrentLocation(station, detourRoute);
     if (mounted) {
       setState(() {
         activeRouteDestination = StationMarkerDetails(
@@ -2825,7 +2916,9 @@ class _MapContainerState extends State<MapContainer> {
           lng: place.lng,
           distanceMeters: null,
         );
+        activeRouteGeoJson = detourRoute;
         isRouteActive = true;
+        isNavigationFollowing = false;
       });
     }
 
@@ -3054,25 +3147,218 @@ class _MapContainerState extends State<MapContainer> {
 
   Future<void> focusRouteFromCurrentLocation(
     StationMarkerDetails destination,
+    Map<String, dynamic>? routeGeoJson,
   ) async {
     final origin = currentLocation;
     final map = mapboxMap;
     if (origin == null || map == null) return;
 
+    final routePoints = _routeCameraPoints(
+      routeGeoJson,
+      destination: destination,
+    );
+    if (routePoints.length >= 2) {
+      try {
+        final routeCamera = await map.cameraForCoordinatesPadding(
+          routePoints,
+          CameraOptions(bearing: 0, pitch: 0),
+          MbxEdgeInsets(top: 110, left: 48, bottom: 190, right: 48),
+          16.5,
+          null,
+        );
+        await map.flyTo(routeCamera, MapAnimationOptions(duration: 700));
+        currentMapZoom = routeCamera.zoom ?? currentMapZoom;
+        return;
+      } catch (error) {
+        debugPrint('Route camera fit failed: $error');
+      }
+    }
+
+    await map.flyTo(
+      CameraOptions(
+        center: Point(
+          coordinates: Position(
+            (origin.longitude + destination.lng) / 2,
+            (origin.latitude + destination.lat) / 2,
+          ),
+        ),
+        zoom: _routeFallbackZoom(origin, destination),
+        bearing: 0,
+        pitch: 0,
+      ),
+      MapAnimationOptions(duration: 700),
+    );
+  }
+
+  List<Point> _routeCameraPoints(
+    Map<String, dynamic>? routeGeoJson, {
+    required StationMarkerDetails destination,
+  }) {
+    final points = <Point>[];
+    final origin = currentLocation;
+    if (origin != null) {
+      points.add(
+        Point(coordinates: Position(origin.longitude, origin.latitude)),
+      );
+    }
+
+    final features = routeGeoJson?['features'];
+    if (features is List) {
+      for (final feature in features) {
+        if (feature is! Map) continue;
+        final geometry = feature['geometry'];
+        if (geometry is! Map || geometry['type'] != 'LineString') continue;
+        final coordinates = geometry['coordinates'];
+        if (coordinates is! List) continue;
+
+        for (final coordinate in coordinates) {
+          if (coordinate is! List || coordinate.length < 2) continue;
+          final lng = coordinate[0];
+          final lat = coordinate[1];
+          if (lat is num && lng is num) {
+            points.add(
+              Point(coordinates: Position(lng.toDouble(), lat.toDouble())),
+            );
+          }
+        }
+      }
+    }
+
+    points.add(Point(coordinates: Position(destination.lng, destination.lat)));
+    return points;
+  }
+
+  double _routeFallbackZoom(
+    geo.Position origin,
+    StationMarkerDetails destination,
+  ) {
+    final distanceMeters = geo.Geolocator.distanceBetween(
+      origin.latitude,
+      origin.longitude,
+      destination.lat,
+      destination.lng,
+    );
+    if (distanceMeters > 25000) return 10.5;
+    if (distanceMeters > 12000) return 11.5;
+    if (distanceMeters > 6000) return 12.5;
+    if (distanceMeters > 3000) return 13.5;
+    return 14.5;
+  }
+
+  Future<void> focusNavigationFromCurrentLocation(
+    StationMarkerDetails destination, {
+    Map<String, dynamic>? routeGeoJson,
+    geo.Position? originOverride,
+  }) async {
+    final origin = originOverride ?? currentLocation;
+    final map = mapboxMap;
+    if (origin == null || map == null) return;
+
+    final bearing = _navigationBearing(
+      origin,
+      routeGeoJson ?? activeRouteGeoJson,
+      destination,
+    );
     await map.setCamera(
       CameraOptions(
         center: Point(coordinates: Position(origin.longitude, origin.latitude)),
-        zoom: 16.5,
-        bearing: _bearingToDestination(
-          origin.latitude,
-          origin.longitude,
-          destination.lat,
-          destination.lng,
-        ),
-        pitch: 50,
+        zoom: 17.2,
+        bearing: bearing,
+        pitch: 62,
       ),
     );
+    currentMapZoom = 17.2;
   }
+
+  double _navigationBearing(
+    geo.Position origin,
+    Map<String, dynamic>? routeGeoJson,
+    StationMarkerDetails destination,
+  ) {
+    final points = _routeCameraPoints(routeGeoJson, destination: destination);
+    if (points.length >= 2) {
+      var nearestIndex = 0;
+      var nearestDistance = double.infinity;
+      for (var index = 0; index < points.length; index++) {
+        final coordinates = points[index].coordinates;
+        final distance = geo.Geolocator.distanceBetween(
+          origin.latitude,
+          origin.longitude,
+          coordinates.lat.toDouble(),
+          coordinates.lng.toDouble(),
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = index;
+        }
+      }
+
+      final target = _routePointAhead(
+        points,
+        nearestIndex,
+        minimumMetersAhead: 60,
+      );
+      if (target != null) {
+        return _bearingBetween(
+          origin.latitude,
+          origin.longitude,
+          target.coordinates.lat.toDouble(),
+          target.coordinates.lng.toDouble(),
+        );
+      }
+    }
+
+    return _bearingBetween(
+      origin.latitude,
+      origin.longitude,
+      destination.lat,
+      destination.lng,
+    );
+  }
+
+  Point? _routePointAhead(
+    List<Point> points,
+    int startIndex, {
+    required double minimumMetersAhead,
+  }) {
+    if (points.isEmpty) return null;
+    final start = points[startIndex.clamp(0, points.length - 1)];
+
+    for (var index = startIndex + 1; index < points.length; index++) {
+      final candidate = points[index];
+      final distance = geo.Geolocator.distanceBetween(
+        start.coordinates.lat.toDouble(),
+        start.coordinates.lng.toDouble(),
+        candidate.coordinates.lat.toDouble(),
+        candidate.coordinates.lng.toDouble(),
+      );
+      if (distance >= minimumMetersAhead) return candidate;
+    }
+
+    return points.length > 1 ? points.last : null;
+  }
+
+  double _bearingBetween(
+    double originLat,
+    double originLng,
+    double destinationLat,
+    double destinationLng,
+  ) {
+    final lat1 = _degreesToRadians(originLat);
+    final lat2 = _degreesToRadians(destinationLat);
+    final deltaLng = _degreesToRadians(destinationLng - originLng);
+
+    final y = math.sin(deltaLng) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
+
+    return (_radiansToDegrees(math.atan2(y, x)) + 360) % 360;
+  }
+
+  double _degreesToRadians(double degrees) => degrees * math.pi / 180;
+
+  double _radiansToDegrees(double radians) => radians * 180 / math.pi;
 
   Future<void> drawRoute(Map<String, dynamic> routeGeoJson) async {
     final map = mapboxMap;
@@ -3190,8 +3476,10 @@ class _MapContainerState extends State<MapContainer> {
     if (mounted) {
       setState(() {
         activeRouteDestination = null;
+        activeRouteGeoJson = null;
         activeRouteDashboard = null;
         isRouteActive = false;
+        isNavigationFollowing = false;
       });
     }
 
@@ -3663,8 +3951,10 @@ class _MapContainerState extends State<MapContainer> {
             stationAnnotationManager = null;
             stationLabelManager = null;
             activeRouteDestination = null;
+            activeRouteGeoJson = null;
             activeRouteDashboard = null;
             isRouteActive = false;
+            isNavigationFollowing = false;
             if (enableDetailed3D) {
               await enable3DMapView();
             }

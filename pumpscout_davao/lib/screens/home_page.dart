@@ -1196,7 +1196,10 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    await mapKey.currentState?.showRouteToPlace(destination);
+    await mapKey.currentState?.showRouteToPlace(
+      destination,
+      startNavigation: true,
+    );
   }
 
   Future<void> analyzeCheapestGasDetour() async {

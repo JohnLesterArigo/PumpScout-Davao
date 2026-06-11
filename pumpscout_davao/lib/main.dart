@@ -43,6 +43,7 @@ const String firebaseRealtimeDatabaseUrl =
     'https://pumpscout-davao-default-rtdb.asia-southeast1.firebasedatabase.app';
 const String demoHardwareStationId = '1ab26M1Oe1CkO02Tayee';
 const int stationDemoRadiusMeters = 20000;
+const double priceReportMaxDistanceMeters = 3000;
 
 bool get isCloudinaryConfigured =>
     cloudinaryCloudName != 'YOUR_CLOUDINARY_CLOUD_NAME' &&
