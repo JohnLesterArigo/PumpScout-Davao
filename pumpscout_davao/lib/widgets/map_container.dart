@@ -2,8 +2,15 @@ part of '../main.dart';
 
 class MapContainer extends StatefulWidget {
   final bool isDarkMode;
+  final bool showRecenterControl;
+  final VoidCallback? onRouteCancelled;
 
-  const MapContainer({super.key, required this.isDarkMode});
+  const MapContainer({
+    super.key,
+    required this.isDarkMode,
+    this.showRecenterControl = true,
+    this.onRouteCancelled,
+  });
 
   @override
   State<MapContainer> createState() => _MapContainerState();
@@ -33,6 +40,7 @@ class _MapContainerState extends State<MapContainer> {
   final Set<String> favoriteStationKeys = {};
   final Map<String, StationMarkerDetails> savedStationDetailsByKey = {};
   StationMarkerDetails? activeRouteDestination;
+  DestinationPlace? activeRoutePlace;
   Map<String, dynamic>? activeRouteGeoJson;
   _RouteDashboardData? activeRouteDashboard;
   bool isRouteActive = false;
@@ -1301,7 +1309,7 @@ class _MapContainerState extends State<MapContainer> {
       showDragHandle: true,
       isScrollControlled: true,
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.66,
+        maxHeight: MediaQuery.of(context).size.height * 0.78,
       ),
       builder: (context) {
         return StatefulBuilder(
@@ -1399,8 +1407,8 @@ class _MapContainerState extends State<MapContainer> {
                   else
                     SizedBox(
                       height: math.min(
-                        MediaQuery.of(context).size.height * 0.45,
-                        stations.length * 88.0,
+                        MediaQuery.of(context).size.height * 0.50,
+                        stations.length * 72.0,
                       ),
                       child: ListView.separated(
                         itemCount: stations.length,
@@ -1600,22 +1608,24 @@ class _MapContainerState extends State<MapContainer> {
     return InkWell(
       onTap: onOpen,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(
           children: [
             CircleAvatar(
-              radius: 18,
+              radius: 16,
               backgroundColor: const Color(0xFFE8F5E9),
               child: Text(
                 '$rank',
                 style: const TextStyle(
                   color: Color(0xFF00A152),
-                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
+              flex: 5,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1624,8 +1634,8 @@ class _MapContainerState extends State<MapContainer> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -1639,45 +1649,66 @@ class _MapContainerState extends State<MapContainer> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  _fuelLabelForStation(details, fuelType),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+            const SizedBox(width: 6),
+            Expanded(
+              flex: 4,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _fuelLabelForStation(details, fuelType),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-                Text(
-                  price == null ? 'No data' : 'PHP ${price.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF00A152),
+                  Text(
+                    price == null
+                        ? 'No data'
+                        : 'PHP ${price.toStringAsFixed(2)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF00A152),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            IconButton(
-              tooltip: isFavorite ? 'Remove favorite' : 'Favorite station',
-              onPressed: onFavoritePressed,
-              icon: Icon(
-                isFavorite ? Icons.star : Icons.star_border,
-                color: Colors.amber.shade700,
+                ],
               ),
             ),
-            IconButton(
-              tooltip: 'Show route',
-              onPressed: onNavigate,
-              icon: const Icon(Icons.navigation),
+            SizedBox(
+              width: 40,
+              child: IconButton(
+                tooltip: isFavorite ? 'Remove favorite' : 'Favorite station',
+                onPressed: onFavoritePressed,
+                iconSize: 22,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: Icon(
+                  isFavorite ? Icons.star : Icons.star_border,
+                  color: Colors.amber.shade700,
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 34,
+              child: IconButton(
+                tooltip: 'Show route',
+                onPressed: onNavigate,
+                iconSize: 22,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.navigation),
+              ),
             ),
           ],
         ),
@@ -2543,7 +2574,10 @@ class _MapContainerState extends State<MapContainer> {
     await drawStationMarkers(pricedStations, loadId);
   }
 
-  Future<void> showInAppRoute(StationMarkerDetails details) async {
+  Future<void> showInAppRoute(
+    StationMarkerDetails details, {
+    bool closeCurrentSheet = true,
+  }) async {
     final navigator = Navigator.of(context);
     final origin = await _getFreshCurrentLocation();
     if (origin == null || mapboxMap == null) {
@@ -2553,7 +2587,9 @@ class _MapContainerState extends State<MapContainer> {
       return;
     }
 
-    navigator.pop();
+    if (closeCurrentSheet && navigator.canPop()) {
+      navigator.pop();
+    }
 
     final route = await fetchDrivingRoute(
       originLat: origin.latitude,
@@ -2567,6 +2603,7 @@ class _MapContainerState extends State<MapContainer> {
     if (mounted) {
       setState(() {
         activeRouteDestination = details;
+        activeRoutePlace = null;
         activeRouteGeoJson = route;
         isRouteActive = true;
         isNavigationFollowing = true;
@@ -2621,6 +2658,7 @@ class _MapContainerState extends State<MapContainer> {
     if (mounted) {
       setState(() {
         activeRouteDestination = destination;
+        activeRoutePlace = place;
         activeRouteGeoJson = route;
         isRouteActive = true;
         isNavigationFollowing = true;
@@ -2916,6 +2954,7 @@ class _MapContainerState extends State<MapContainer> {
           lng: place.lng,
           distanceMeters: null,
         );
+        activeRoutePlace = place;
         activeRouteGeoJson = detourRoute;
         isRouteActive = true;
         isNavigationFollowing = false;
@@ -3476,6 +3515,7 @@ class _MapContainerState extends State<MapContainer> {
     if (mounted) {
       setState(() {
         activeRouteDestination = null;
+        activeRoutePlace = null;
         activeRouteGeoJson = null;
         activeRouteDashboard = null;
         isRouteActive = false;
@@ -3483,6 +3523,7 @@ class _MapContainerState extends State<MapContainer> {
       });
     }
 
+    widget.onRouteCancelled?.call();
     await moveToCurrentLocation();
   }
 
@@ -3951,6 +3992,7 @@ class _MapContainerState extends State<MapContainer> {
             stationAnnotationManager = null;
             stationLabelManager = null;
             activeRouteDestination = null;
+            activeRoutePlace = null;
             activeRouteGeoJson = null;
             activeRouteDashboard = null;
             isRouteActive = false;
@@ -3968,46 +4010,65 @@ class _MapContainerState extends State<MapContainer> {
             left: 66,
             child: _RouteDashboardCard(data: activeRouteDashboard!),
           ),
-        Positioned(
-          top: 46,
-          left: 12,
-          child: Material(
-            color: Colors.white,
-            elevation: 3,
-            borderRadius: BorderRadius.circular(8),
-            clipBehavior: Clip.antiAlias,
-            child: Tooltip(
-              message: 'Recenter',
-              child: InkWell(
-                onTap: moveToCurrentLocation,
-                child: SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: Padding(
-                    padding: const EdgeInsets.all(9),
-                    child: Image.asset(
-                      'assets/images/center.png',
-                      fit: BoxFit.contain,
+        if (widget.showRecenterControl)
+          Positioned(
+            top: 46,
+            left: 12,
+            child: Material(
+              color: Colors.white,
+              elevation: 3,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: Tooltip(
+                message: 'Recenter',
+                child: InkWell(
+                  onTap: moveToCurrentLocation,
+                  child: SizedBox(
+                    width: 42,
+                    height: 42,
+                    child: Padding(
+                      padding: const EdgeInsets.all(9),
+                      child: Image.asset(
+                        'assets/images/center.png',
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
         if (isRouteActive)
           Positioned(
             right: 12,
             bottom: 12,
             child: SafeArea(
-              child: FilledButton.icon(
-                onPressed: cancelRoute,
-                icon: const Icon(Icons.close),
-                label: const Text('Cancel route'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red.shade700,
-                  foregroundColor: Colors.white,
-                ),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  if (activeRoutePlace != null)
+                    FilledButton.icon(
+                      onPressed: () =>
+                          showCheapestDetourAnalysis(activeRoutePlace!),
+                      icon: const Icon(Icons.local_gas_station),
+                      label: const Text('Detour'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1E8E3E),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  FilledButton.icon(
+                    onPressed: cancelRoute,
+                    icon: const Icon(Icons.close),
+                    label: const Text('Cancel route'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.red.shade700,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

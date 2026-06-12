@@ -90,6 +90,13 @@ flutter:
     - assets/images/22nd image.png
     - assets/images/33rd.png
     - assets/images/tikbalang thing of fuel.png
+    - assets/images/Shell_logo.png
+    - assets/images/petron_logo.jpg
+    - assets/images/seaOil_Logo.png
+    - assets/images/caltext_logo.jpg
+    - assets/images/uniOil_logo.png
+    - assets/images/myGas_logo.png
+    - assets/images/car.png
     - assets/data/regional_price_stats.json
     - assets/data/price_forecast_model.json
 

@@ -47,13 +47,35 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final mapKey = GlobalKey<_MapContainerState>();
   final destinationController = TextEditingController();
+  final PageController fuelInsightsController = PageController();
   List<DestinationPlace> destinationSuggestions = [];
   DestinationPlace? selectedDestination;
+  DestinationPlace? activeHomeRoutePlace;
   bool isSearchingDestination = false;
-  bool isDestinationSearchOpen = false;
+  Timer? fuelInsightsTimer;
+  Future<List<_HomeFuelInsight>>? fuelInsightsFuture;
+  Future<List<StationMarkerDetails>>? cheapestStationsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    fuelInsightsFuture = loadHomeFuelInsights();
+    cheapestStationsFuture = loadHomeStationDetails();
+    fuelInsightsTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!fuelInsightsController.hasClients) return;
+      final nextPage = (fuelInsightsController.page?.round() ?? 0) + 1;
+      fuelInsightsController.animateToPage(
+        nextPage,
+        duration: const Duration(milliseconds: 520),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
 
   @override
   void dispose() {
+    fuelInsightsTimer?.cancel();
+    fuelInsightsController.dispose();
     destinationController.dispose();
     super.dispose();
   }
@@ -1165,7 +1187,14 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> searchDestination() async {
     final query = destinationController.text.trim();
-    if (query.length < 3) return;
+    if (query.length < 3) {
+      setState(() {
+        destinationSuggestions = [];
+        selectedDestination = null;
+        isSearchingDestination = false;
+      });
+      return;
+    }
 
     setState(() {
       isSearchingDestination = true;
@@ -1196,9 +1225,13 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    await mapKey.currentState?.showRouteToPlace(
-      destination,
-      startNavigation: true,
+    setState(() {
+      activeHomeRoutePlace = destination;
+    });
+
+    await showExpandedMap(
+      afterOpen: (mapState) =>
+          mapState.showRouteToPlace(destination, startNavigation: true),
     );
   }
 
@@ -1209,270 +1242,344 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    await mapKey.currentState?.showCheapestDetourAnalysis(destination);
+    await showExpandedMap(
+      afterOpen: (mapState) => mapState.showCheapestDetourAnalysis(destination),
+    );
   }
 
-  Widget _destinationSearchOverlay() {
-    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-    final keyboardOpen = keyboardHeight > 0;
+  Future<void> showDestinationSearchSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            Future<void> runSearch() async {
+              setSheetState(() {
+                isSearchingDestination = true;
+              });
+              await searchDestination();
+              if (sheetContext.mounted) setSheetState(() {});
+            }
 
-    if (!isDestinationSearchOpen) {
-      return Positioned(
-        left: 12,
-        bottom: 12,
-        child: SafeArea(
-          child: Material(
-            color: Theme.of(context).colorScheme.surface,
-            elevation: 4,
-            borderRadius: BorderRadius.circular(8),
-            clipBehavior: Clip.antiAlias,
-            child: IconButton(
-              tooltip: 'Search destination',
-              onPressed: () {
-                setState(() {
-                  isDestinationSearchOpen = true;
-                });
-              },
-              icon: const Icon(Icons.search),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Positioned(
-      left: 12,
-      right: 12,
-      top: keyboardOpen ? 12 : null,
-      bottom: keyboardOpen ? null : 12,
-      child: SafeArea(
-        child: Material(
-          color: Theme.of(context).colorScheme.surface,
-          elevation: 5,
-          borderRadius: BorderRadius.circular(8),
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: destinationController,
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: (_) => searchDestination(),
-                        decoration: InputDecoration(
-                          hintText: 'Search destination',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: isSearchingDestination
-                              ? const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                )
-                              : IconButton(
-                                  tooltip: 'Search',
-                                  onPressed: searchDestination,
-                                  icon: const Icon(Icons.arrow_forward),
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                4,
+                16,
+                18 + MediaQuery.of(sheetContext).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Search destination',
+                    style: Theme.of(sheetContext).textTheme.titleMedium
+                        ?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: _psPrimaryTextColor(sheetContext),
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Choose a result, then press Navigate.',
+                    style: TextStyle(
+                      color: _psMutedTextColor(sheetContext),
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: destinationController,
+                    autofocus: true,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => runSearch(),
+                    decoration: InputDecoration(
+                      hintText: 'Search station, location...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: isSearchingDestination
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
                                 ),
-                          border: const OutlineInputBorder(),
-                          isDense: true,
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Search',
+                              onPressed: runSearch,
+                              icon: const Icon(Icons.arrow_forward),
+                            ),
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (destinationSuggestions.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight:
+                            MediaQuery.of(sheetContext).size.height * 0.34,
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: destinationSuggestions.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final place = destinationSuggestions[index];
+                          final isSelected =
+                              selectedDestination?.name == place.name &&
+                              selectedDestination?.lat == place.lat &&
+                              selectedDestination?.lng == place.lng;
+                          return ListTile(
+                            dense: true,
+                            selected: isSelected,
+                            leading: Icon(
+                              isSelected
+                                  ? Icons.check_circle
+                                  : Icons.place_outlined,
+                              color: isSelected
+                                  ? const Color(0xFF2563EB)
+                                  : null,
+                            ),
+                            title: Text(
+                              place.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              place.address,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () {
+                              selectDestination(place);
+                              setSheetState(() {});
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  if (!isSearchingDestination &&
+                      destinationController.text.trim().length >= 3 &&
+                      destinationSuggestions.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'No results yet. Try a more specific Davao location.',
+                        style: TextStyle(
+                          color: _psMutedTextColor(sheetContext),
+                          fontSize: 12,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      tooltip: 'Navigate',
-                      onPressed: navigateToSelectedDestination,
-                      icon: const Icon(Icons.navigation_outlined),
-                    ),
-                    IconButton(
-                      tooltip: 'Compare refuel stops',
-                      onPressed: analyzeCheapestGasDetour,
-                      icon: const Icon(Icons.local_gas_station),
-                      color: const Color(0xFF1E8E3E),
-                    ),
-                    IconButton(
-                      tooltip: 'Close search',
-                      onPressed: () {
-                        setState(() {
-                          isDestinationSearchOpen = false;
-                          destinationSuggestions = [];
-                        });
-                      },
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-                if (destinationSuggestions.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 150),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: destinationSuggestions.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final place = destinationSuggestions[index];
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.place_outlined),
-                          title: Text(
-                            place.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            place.address,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => selectDestination(place),
-                        );
-                      },
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: selectedDestination == null
+                          ? null
+                          : () async {
+                              Navigator.of(sheetContext).pop();
+                              await navigateToSelectedDestination();
+                            },
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Navigate'),
                     ),
                   ),
                 ],
-              ],
-            ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<List<StationMarkerDetails>> loadHomeStationDetails() async {
+    final stations = await fetchStationPrices();
+    final details = stations
+        .where((station) => station.lat != 0 && station.lng != 0)
+        .map(
+          (station) => StationMarkerDetails(
+            name: station.name,
+            brand: station.brand,
+            lat: station.lat,
+            lng: station.lng,
+            distanceMeters: null,
+            price: station,
           ),
-        ),
+        )
+        .toList();
+
+    details.sort((a, b) {
+      final aPrice = _homeLowestPrice(a.price);
+      final bPrice = _homeLowestPrice(b.price);
+      return (aPrice ?? double.infinity).compareTo(bPrice ?? double.infinity);
+    });
+    return details;
+  }
+
+  Future<List<_HomeFuelInsight>> loadHomeFuelInsights() async {
+    final details = await loadHomeStationDetails();
+    final stats = await RegionalPriceModel.load();
+    final insights = <_HomeFuelInsight>[];
+
+    for (final station in details.take(12)) {
+      final price = station.price;
+      if (price == null) continue;
+
+      final fuelTypes = <String>[
+        if (price.diesel != null) 'diesel',
+        if (price.gasoline != null) 'gasoline',
+        if (price.premium != null) 'premium',
+      ];
+
+      for (final fuelType in fuelTypes) {
+        final currentPrice = _homeFuelPrice(price, fuelType);
+        if (currentPrice == null) continue;
+
+        FuelPriceForecast? forecast;
+        try {
+          final reports = await fetchPriceReports(station);
+          forecast = await TrainedPriceForecastService.forecastFuelPrice(
+            reports: reports,
+            station: station,
+            fuelType: fuelType,
+            regionalStats: stats,
+          );
+          forecast ??= forecastFuelPrice(
+            reports,
+            fuelType,
+            regionalStats: stats,
+          );
+        } catch (error) {
+          debugPrint('Home forecast load failed: $error');
+        }
+
+        insights.add(
+          _HomeFuelInsight(
+            station: station,
+            fuelType: fuelType,
+            currentPrice: currentPrice,
+            predictedPrice: forecast?.predictedPrice ?? currentPrice,
+            confidencePercent: forecast?.confidencePercent,
+            history: forecast?.history ?? const <double>[],
+            hasForecast: forecast != null,
+          ),
+        );
+      }
+    }
+
+    return insights;
+  }
+
+  double? _homeFuelPrice(StationPrice price, String fuelType) {
+    return switch (fuelType) {
+      'diesel' => price.diesel,
+      'premium' => price.premium,
+      _ => price.gasoline,
+    };
+  }
+
+  double? _homeLowestPrice(StationPrice? price) {
+    if (price == null) return null;
+    final values = [
+      price.gasoline,
+      price.diesel,
+      price.premium,
+    ].whereType<double>().where((value) => value > 0).toList();
+    if (values.isEmpty) return null;
+    return values.reduce(math.min);
+  }
+
+  Future<void> showExpandedMap({
+    Future<void> Function(_MapContainerState mapState)? afterOpen,
+  }) async {
+    final expandedMapKey = GlobalKey<_MapContainerState>();
+    final routeToRestore = activeHomeRoutePlace;
+    final actionToRun =
+        afterOpen ??
+        (routeToRestore == null
+            ? null
+            : (_MapContainerState mapState) => mapState.showRouteToPlace(
+                routeToRestore,
+                startNavigation: true,
+              ));
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) {
+          if (actionToRun != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _runExpandedMapAction(expandedMapKey, actionToRun);
+            });
+          }
+
+          return Scaffold(
+            backgroundColor: _psPageColor(context),
+            appBar: AppBar(
+              title: const Text('PumpScout Map'),
+              backgroundColor: _psPageColor(context),
+              foregroundColor: _psPrimaryTextColor(context),
+              elevation: 0,
+            ),
+            body: MapContainer(
+              key: expandedMapKey,
+              isDarkMode: widget.isDarkMode,
+              onRouteCancelled: clearHomeRoute,
+            ),
+          );
+        },
       ),
     );
+  }
+
+  void clearHomeRoute() {
+    if (!mounted) return;
+    setState(() {
+      activeHomeRoutePlace = null;
+      selectedDestination = null;
+      destinationController.clear();
+    });
+  }
+
+  Future<void> _runExpandedMapAction(
+    GlobalKey<_MapContainerState> expandedMapKey,
+    Future<void> Function(_MapContainerState mapState) action,
+  ) async {
+    for (var attempt = 0; attempt < 24; attempt++) {
+      final mapState = expandedMapKey.currentState;
+      if (mapState != null && mapState.mapboxMap != null && mapState.mounted) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        if (mapState.mounted) {
+          await action(mapState);
+        }
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
-        elevation: 0,
-        title: Text(
-          'PumpScout',
-          style: TextStyle(
-            color: Theme.of(context).textTheme.bodyLarge?.color,
-            fontWeight: FontWeight.bold,
-            fontSize: 24,
-          ),
-        ),
-        actions: [
-          StreamBuilder<int>(
-            stream: unreadNotificationCountStream(),
-            builder: (context, snapshot) {
-              final unreadCount = snapshot.data ?? 0;
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  IconButton(
-                    tooltip: 'Inbox',
-                    onPressed: showNotificationInbox,
-                    icon: const Icon(Icons.notifications_none),
-                  ),
-                  if (unreadCount > 0)
-                    Positioned(
-                      right: 7,
-                      top: 7,
-                      child: Container(
-                        constraints: const BoxConstraints(
-                          minWidth: 17,
-                          minHeight: 17,
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        decoration: BoxDecoration(
-                          color: _psRed,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          unreadCount > 9 ? '9+' : '$unreadCount',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-          IconButton(
-            tooltip: 'Top contributors',
-            onPressed: showContributorsFrame,
-            icon: const Icon(Icons.emoji_events_outlined),
-          ),
-          IconButton(
-            tooltip: 'Community contributions',
-            onPressed: showCommunityContributionsPage,
-            icon: const Icon(Icons.forum_outlined),
-          ),
-          IconButton(
-            tooltip: 'Profile',
-            onPressed: showProfileSheet,
-            icon: const Icon(Icons.account_circle_outlined),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-
-      body: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
+      backgroundColor: _psPageColor(context),
+      body: SafeArea(
+        child: Stack(
           children: [
-            // Menu Grid Row converted to interactive Buttons
-            Row(
-              children: [
-                _buildMenuCard(
-                  title: 'Nearby',
-
-                  imagePath: 'assets/images/map.png',
-                  onTap: () => mapKey.currentState?.showNearbyStationsPanel(),
-                ),
-                _buildMenuCard(
-                  title: 'Cheapest',
-                  imagePath: 'assets/images/cheapest.png',
-                  onTap: () => mapKey.currentState?.showCheapestStationsPanel(),
-                ),
-                _buildMenuCard(
-                  title: 'Calculator',
-                  imagePath: 'assets/images/calculator.png',
-                  onTap: () => showFuelCalculatorPanel(context),
-                ),
-                _buildMenuCard(
-                  title: 'Saved',
-                  imagePath: 'assets/images/placeholder.png',
-                  onTap: () => mapKey.currentState?.showSavedStationsPanel(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: MapContainer(
-                        key: mapKey,
-                        isDarkMode: widget.isDarkMode,
-                      ),
-                    ),
-                  ),
-                  _destinationSearchOverlay(),
-                ],
-              ),
+            Positioned.fill(child: _homeContent(context)),
+            Positioned(
+              left: 18,
+              right: 18,
+              bottom: 12,
+              child: _homeBottomNav(context),
             ),
           ],
         ),
@@ -1480,53 +1587,1132 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Updated Helper method with Image and InkWell (Button functionality)
+  Widget _homeContent(BuildContext context) {
+    try {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 108),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _homeHeader(context),
+            const SizedBox(height: 18),
+            _homeSearchBar(context),
+            const SizedBox(height: 18),
+            _homeShortcutPanel(context),
+            const SizedBox(height: 18),
+            _fuelInsightsSection(context),
+            const SizedBox(height: 18),
+            _nearbyMapPreview(context),
+            const SizedBox(height: 18),
+            _cheapestNearYouSection(context),
+          ],
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('HomePage build failed: $error\n$stackTrace');
+      return _homeBuildError(context, error);
+    }
+  }
+
+  Widget _homeBuildError(BuildContext context, Object error) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, color: Color(0xFFE94B5A), size: 44),
+            const SizedBox(height: 12),
+            Text(
+              'Home page could not load',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$error',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _psMutedTextColor(context), fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _homeHeader(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final displayName = user?.displayName?.trim().isNotEmpty == true
+        ? user!.displayName!.trim().split(' ').first
+        : 'PumpScout';
+
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _greetingText(),
+                style: TextStyle(
+                  color: _psMutedTextColor(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _psPrimaryTextColor(context),
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Save more on every trip',
+                style: TextStyle(
+                  color: _psMutedTextColor(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        _notificationButton(context),
+        const SizedBox(width: 8),
+        InkWell(
+          onTap: showProfileSheet,
+          borderRadius: BorderRadius.circular(999),
+          child: CircleAvatar(
+            radius: 24,
+            backgroundColor: const Color(0xFFEAF2FF),
+            child: Icon(
+              Icons.person_outline,
+              color: _psPrimaryTextColor(context),
+              size: 26,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _greetingText() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good Morning';
+    if (hour < 18) return 'Good Afternoon';
+    return 'Good Evening';
+  }
+
+  Widget _notificationButton(BuildContext context) {
+    return StreamBuilder<int>(
+      stream: unreadNotificationCountStream(),
+      builder: (context, snapshot) {
+        final unreadCount = snapshot.data ?? 0;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Material(
+              color: _psPanelColor(context),
+              elevation: 5,
+              shadowColor: Colors.black.withValues(alpha: 0.08),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Inbox',
+                onPressed: showNotificationInbox,
+                icon: const Icon(Icons.notifications_none),
+              ),
+            ),
+            if (unreadCount > 0)
+              Positioned(
+                top: -2,
+                right: -1,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: _psRed,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    unreadCount > 9 ? '9+' : '$unreadCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _homeSearchBar(BuildContext context) {
+    return Material(
+      color: _psPanelColor(context),
+      elevation: 6,
+      shadowColor: Colors.black.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: showDestinationSearchSheet,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          child: Row(
+            children: [
+              Icon(Icons.search, color: _psMutedTextColor(context), size: 28),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  selectedDestination?.name ?? 'Search station, location...',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _homeShortcutPanel(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+      decoration: _homeCardDecoration(context),
+      child: Row(
+        children: [
+          _buildMenuCard(
+            title: 'Nearby',
+            imagePath: 'assets/images/map.png',
+            color: const Color(0xFF2563EB),
+            onTap: () => showExpandedMap(
+              afterOpen: (mapState) async {
+                await mapState.moveToCurrentLocation();
+                mapState.showNearbyStationsPanel();
+              },
+            ),
+          ),
+          _buildMenuCard(
+            title: 'Cheapest',
+            imagePath: 'assets/images/cheapest.png',
+            color: const Color(0xFF16A34A),
+            onTap: () => showExpandedMap(
+              afterOpen: (mapState) async {
+                mapState.showCheapestStationsPanel();
+              },
+            ),
+          ),
+          _buildMenuCard(
+            title: 'Calculator',
+            imagePath: 'assets/images/calculator.png',
+            color: const Color(0xFFF59E0B),
+            onTap: () => showFuelCalculatorPanel(context),
+          ),
+          _buildMenuCard(
+            title: 'Saved',
+            imagePath: 'assets/images/placeholder.png',
+            color: const Color(0xFFE11D48),
+            onTap: () => showExpandedMap(
+              afterOpen: (mapState) async {
+                mapState.showSavedStationsPanel();
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration _homeCardDecoration(BuildContext context) {
+    return BoxDecoration(
+      color: _psPanelColor(context),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: _psBorderColor(context)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.08),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMenuCard({
     required String title,
     required String imagePath,
+    required Color color,
     required VoidCallback onTap,
   }) {
     return Expanded(
-      child: Card(
-        elevation: 2,
-        shadowColor: Colors.black26,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: Colors.grey.shade300),
-        ),
-        color: Colors.white,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Replaces the emoji with an Image widget
-                Image.asset(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color.withValues(alpha: 0.86), color],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.32),
+                      blurRadius: 14,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(13),
+                child: Image.asset(
                   imagePath,
-                  height: 40,
-                  width: 40,
                   fit: BoxFit.contain,
-                  // Fallback if image isn't found during development
-                  errorBuilder: (context, error, stackTrace) =>
-                      const Icon(Icons.image, size: 40),
+                  errorBuilder: (context, error, stackTrace) => Icon(
+                    Icons.local_gas_station,
+                    color: Colors.white,
+                    size: 26,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: _psPrimaryTextColor(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _fuelInsightsSection(BuildContext context) {
+    return FutureBuilder<List<_HomeFuelInsight>>(
+      future: fuelInsightsFuture,
+      builder: (context, snapshot) {
+        final insights = snapshot.data ?? const <_HomeFuelInsight>[];
+        return Container(
+          height: 260,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            gradient: LinearGradient(
+              colors: _psIsDark(context)
+                  ? const [Color(0xFF0E2238), Color(0xFF142F4F)]
+                  : const [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
+            ),
+            border: Border.all(color: const Color(0xFF93C5FD)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF2563EB).withValues(alpha: 0.10),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: snapshot.connectionState == ConnectionState.waiting
+              ? const Center(child: CircularProgressIndicator())
+              : insights.isEmpty
+              ? _emptyFuelInsights(context)
+              : PageView.builder(
+                  controller: fuelInsightsController,
+                  itemBuilder: (context, index) {
+                    final insight = insights[index % insights.length];
+                    return _fuelInsightCard(context, insight);
+                  },
+                ),
+        );
+      },
+    );
+  }
+
+  Widget _emptyFuelInsights(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionTitle(context, 'Fuel Forecast', icon: Icons.insights),
+          const Spacer(),
+          Text(
+            'No station prices available yet.',
+            style: TextStyle(
+              color: _psPrimaryTextColor(context),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Verified station prices will appear here as forecast cards.',
+            style: TextStyle(color: _psMutedTextColor(context)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fuelInsightCard(BuildContext context, _HomeFuelInsight insight) {
+    final change = insight.predictedPrice - insight.currentPrice;
+    final isDown = change < 0;
+    final changeColor = isDown ? const Color(0xFF16A34A) : _psRed;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 9,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sectionTitle(
+                  context,
+                  'Fuel Forecast',
+                  logoPath: _stationLogoAsset(insight.brandLabel),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
+                  insight.stationTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psPrimaryTextColor(context),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  insight.brandLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  insight.fuelLabel.toUpperCase(),
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'PHP ${insight.currentPrice.toStringAsFixed(2)}/L',
+                    style: TextStyle(
+                      color: _psPrimaryTextColor(context),
+                      fontSize: 25,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      isDown ? Icons.arrow_downward : Icons.arrow_upward,
+                      color: changeColor,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '${change.abs().toStringAsFixed(2)} next week',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: changeColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 8,
+            child: Column(
+              children: [
+                Expanded(
+                  child: CustomPaint(
+                    painter: _HomeInsightChartPainter(
+                      values: insight.chartValues,
+                      color: const Color(0xFF2563EB),
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F8EE),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Prediction',
+                              style: TextStyle(
+                                color: Color(0xFF334155),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'PHP ${insight.predictedPrice.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  color: Color(0xFF0F172A),
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        isDown ? Icons.trending_down : Icons.trending_up,
+                        color: const Color(0xFF16A34A),
+                        size: 24,
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(
+    BuildContext context,
+    String title, {
+    IconData icon = Icons.local_gas_station,
+    String? logoPath,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: logoPath == null ? const Color(0xFF2563EB) : Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: logoPath == null
+                ? null
+                : Border.all(color: _psBorderColor(context)),
+            boxShadow: logoPath == null
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+          ),
+          padding: EdgeInsets.all(logoPath == null ? 0 : 5),
+          child: logoPath == null
+              ? Icon(icon, color: Colors.white, size: 22)
+              : Image.asset(
+                  logoPath,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) {
+                    return Icon(icon, color: Colors.white, size: 22);
+                  },
+                ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: _psPrimaryTextColor(context),
+            fontSize: 17,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _nearbyMapPreview(BuildContext context) {
+    return Container(
+      height: 360,
+      decoration: _homeCardDecoration(context),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 14, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Map',
+                    style: TextStyle(
+                      color: _psPrimaryTextColor(context),
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: showExpandedMap,
+                  icon: const Icon(Icons.open_in_full, size: 16),
+                  label: const Text('Expand Map'),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Stack(
+              children: [Positioned.fill(child: _homeMapPreviewBody(context))],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _homeMapPreviewBody(BuildContext context) {
+    if (accessToken.trim().isEmpty) {
+      return Container(
+        color: _psSoftPanelColor(context),
+        padding: const EdgeInsets.all(18),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.map_outlined,
+                color: _psMutedTextColor(context),
+                size: 34,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Map token missing',
+                style: TextStyle(
+                  color: _psPrimaryTextColor(context),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Run the app with MAPBOX_ACCESS_TOKEN to load the map.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _psMutedTextColor(context),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _liveMiniMapPreview(context);
+  }
+
+  Widget _liveMiniMapPreview(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: MapContainer(
+            key: mapKey,
+            isDarkMode: widget.isDarkMode,
+            showRecenterControl: false,
+          ),
+        ),
+        Positioned(
+          right: 12,
+          top: 12,
+          child: Material(
+            color: Colors.white,
+            elevation: 4,
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Locate me',
+              onPressed: () => mapKey.currentState?.moveToCurrentLocation(),
+              icon: const Icon(Icons.my_location, color: Color(0xFF2563EB)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _cheapestNearYouSection(BuildContext context) {
+    return FutureBuilder<List<StationMarkerDetails>>(
+      future: cheapestStationsFuture,
+      builder: (context, snapshot) {
+        final stations = (snapshot.data ?? const <StationMarkerDetails>[])
+            .where((station) => _homeLowestPrice(station.price) != null)
+            .take(3)
+            .toList();
+
+        return Container(
+          decoration: _homeCardDecoration(context),
+          padding: const EdgeInsets.fromLTRB(14, 16, 14, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Cheapest Around Davao',
+                      style: TextStyle(
+                        color: _psPrimaryTextColor(context),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => showExpandedMap(
+                      afterOpen: (mapState) async {
+                        mapState.showCheapestStationsPanel();
+                      },
+                    ),
+                    child: const Text('View All'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (snapshot.connectionState == ConnectionState.waiting)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (stations.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Text(
+                    'No station prices available yet.',
+                    style: TextStyle(color: _psMutedTextColor(context)),
+                  ),
+                )
+              else
+                for (final station in stations)
+                  _cheapestStationTile(context, station),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _cheapestStationTile(
+    BuildContext context,
+    StationMarkerDetails station,
+  ) {
+    final price = _homeLowestPrice(station.price)!;
+    final brand = station.brand.trim().isEmpty ? station.name : station.brand;
+    return InkWell(
+      onTap: () => showExpandedMap(
+        afterOpen: (mapState) async {
+          mapState.showStationDetailSheet(station);
+        },
+      ),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _psBorderColor(context)),
+        ),
+        child: Row(
+          children: [
+            _stationBrandLogoBadge(context, brand),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    station.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _psPrimaryTextColor(context),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    brand,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _psMutedTextColor(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  'PHP ${price.toStringAsFixed(2)}/L',
+                  style: const TextStyle(
+                    color: Color(0xFF16A34A),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: 32,
+                  child: FilledButton.icon(
+                    onPressed: () => showExpandedMap(
+                      afterOpen: (mapState) => mapState.showInAppRoute(
+                        station,
+                        closeCurrentSheet: false,
+                      ),
+                    ),
+                    icon: const Icon(Icons.navigation, size: 15),
+                    label: const Text(
+                      'Navigate',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      backgroundColor: const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  Widget _stationBrandLogoBadge(BuildContext context, String brand) {
+    final logoPath = _stationLogoAsset(brand);
+    return Container(
+      width: 44,
+      height: 44,
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: _psBorderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: logoPath == null
+          ? Center(
+              child: Text(
+                brand.characters.take(1).toString().toUpperCase(),
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            )
+          : ClipOval(
+              child: Image.asset(
+                logoPath,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) {
+                  return Center(
+                    child: Text(
+                      brand.characters.take(1).toString().toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+    );
+  }
+
+  String? _stationLogoAsset(String brand) {
+    final normalized = brand.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (normalized.contains('shell')) return 'assets/images/Shell_logo.png';
+    if (normalized.contains('petron')) return 'assets/images/petron_logo.jpg';
+    if (normalized.contains('seaoil')) return 'assets/images/seaOil_Logo.png';
+    if (normalized.contains('caltex') || normalized.contains('caltext')) {
+      return 'assets/images/caltext_logo.jpg';
+    }
+    if (normalized.contains('unioil')) return 'assets/images/uniOil_logo.png';
+    if (normalized.contains('mygas')) return 'assets/images/myGas_logo.png';
+    return null;
+  }
+
+  Widget _homeBottomNav(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: _psBorderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _bottomNavItem(context, Icons.home_rounded, 'Home', () {}),
+          _bottomNavItem(
+            context,
+            Icons.receipt_long_outlined,
+            'Rank',
+            showContributorsFrame,
+          ),
+          _bottomNavItem(
+            context,
+            Icons.map_outlined,
+            'Explore',
+            showExpandedMap,
+          ),
+          _bottomNavItem(
+            context,
+            Icons.forum_outlined,
+            'Community',
+            showCommunityContributionsPage,
+          ),
+          _bottomNavItem(
+            context,
+            Icons.person_outline,
+            'Profile',
+            showProfileSheet,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomNavItem(
+    BuildContext context,
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool active = false,
+  }) {
+    final color = active ? const Color(0xFF2563EB) : _psMutedTextColor(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: active ? 27 : 23),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: active ? FontWeight.w900 : FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeFuelInsight {
+  const _HomeFuelInsight({
+    required this.station,
+    required this.fuelType,
+    required this.currentPrice,
+    required this.predictedPrice,
+    required this.history,
+    required this.hasForecast,
+    this.confidencePercent,
+  });
+
+  final StationMarkerDetails station;
+  final String fuelType;
+  final double currentPrice;
+  final double predictedPrice;
+  final List<double> history;
+  final bool hasForecast;
+  final int? confidencePercent;
+
+  String get fuelLabel {
+    return switch (fuelType) {
+      'diesel' => 'Diesel',
+      'premium' => 'Premium',
+      _ => 'Regular',
+    };
+  }
+
+  String get stationTitle {
+    final brand = station.brand.trim();
+    if (brand.isEmpty || brand == station.name) return station.name;
+    return '$brand - ${station.name}';
+  }
+
+  String get brandLabel {
+    final brand = station.brand.trim();
+    return brand.isEmpty ? 'Fuel station' : brand;
+  }
+
+  List<double> get chartValues {
+    if (history.length >= 2) return [...history, predictedPrice];
+    return [currentPrice, (currentPrice + predictedPrice) / 2, predictedPrice];
+  }
+}
+
+class _HomeInsightChartPainter extends CustomPainter {
+  const _HomeInsightChartPainter({required this.values, required this.color});
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  void paint(ui.Canvas canvas, ui.Size size) {
+    if (values.isEmpty || size.width <= 0 || size.height <= 0) return;
+
+    final minValue = values.reduce(math.min);
+    final maxValue = values.reduce(math.max);
+    final range = math.max(maxValue - minValue, 1);
+    final topPadding = size.height * 0.12;
+    final bottomPadding = size.height * 0.22;
+    final chartHeight = size.height - topPadding - bottomPadding;
+
+    final gridPaint = Paint()
+      ..color = color.withValues(alpha: 0.16)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+
+    final baselineY = topPadding + chartHeight * 0.72;
+    canvas.drawLine(
+      Offset(0, baselineY),
+      Offset(size.width, baselineY),
+      gridPaint,
+    );
+
+    final path = Path();
+    for (var index = 0; index < values.length; index++) {
+      final x = values.length == 1
+          ? size.width / 2
+          : (index / (values.length - 1)) * size.width;
+      final normalized = (values[index] - minValue) / range;
+      final y = topPadding + chartHeight * (1 - normalized);
+      if (index == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+
+    final linePaint = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawPath(path, linePaint);
+
+    final dotPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    for (var index = 0; index < values.length; index++) {
+      final x = values.length == 1
+          ? size.width / 2
+          : (index / (values.length - 1)) * size.width;
+      final normalized = (values[index] - minValue) / range;
+      final y = topPadding + chartHeight * (1 - normalized);
+      canvas.drawCircle(Offset(x, y), 3, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HomeInsightChartPainter oldDelegate) {
+    return oldDelegate.values != values || oldDelegate.color != color;
   }
 }

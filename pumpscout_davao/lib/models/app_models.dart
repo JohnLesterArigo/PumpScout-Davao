@@ -437,6 +437,7 @@ class CommunityContribution {
     this.gasoline,
     this.diesel,
     this.premium,
+    this.fuelProducts = const <String, double>{},
     this.photoUrl,
     this.userId,
     this.userDisplayName,
@@ -457,6 +458,7 @@ class CommunityContribution {
   final double? gasoline;
   final double? diesel;
   final double? premium;
+  final Map<String, double> fuelProducts;
   final String? photoUrl;
   final String? userId;
   final String? userDisplayName;
@@ -509,6 +511,7 @@ class CommunityContribution {
       gasoline: _doubleField(data, 'gasoline'),
       diesel: _doubleField(data, 'diesel'),
       premium: _doubleField(data, 'premium'),
+      fuelProducts: _doubleMapField(data, 'fuelProducts'),
       photoUrl: _stringField(data, 'photoUrl'),
       userId: _stringField(data, 'userId'),
       userDisplayName: _stringField(data, 'userDisplayName'),
@@ -540,6 +543,7 @@ class CommunityContribution {
       gasoline: gasoline,
       diesel: diesel,
       premium: premium,
+      fuelProducts: fuelProducts,
       photoUrl: photoUrl,
       userId: userId,
       userDisplayName: userDisplayName,

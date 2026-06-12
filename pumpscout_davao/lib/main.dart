@@ -51,6 +51,8 @@ const String demoHardwareStationId = '1ab26M1Oe1CkO02Tayee';
 const int stationDemoRadiusMeters = 20000;
 const double priceReportMaxDistanceMeters = 3000;
 
+late final Future<FirebaseApp> firebaseInitialization;
+
 bool get isCloudinaryConfigured =>
     cloudinaryCloudName != 'YOUR_CLOUDINARY_CLOUD_NAME' &&
     cloudinaryUploadPreset != 'YOUR_UNSIGNED_UPLOAD_PRESET' &&
@@ -61,11 +63,11 @@ bool requiresEmailVerification(User user) =>
     user.providerData.any((provider) => provider.providerId == 'password');
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // ADD THIS
-
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
+  WidgetsFlutterBinding.ensureInitialized();
   MapboxOptions.setAccessToken(accessToken);
+  firebaseInitialization = Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  ).timeout(const Duration(seconds: 15));
 
   runApp(const PumpScoutApp());
 }
@@ -83,11 +85,14 @@ class _PumpScoutAppState extends State<PumpScoutApp> {
   @override
   void initState() {
     super.initState();
-    _loadThemeMode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadThemeMode();
+    });
   }
 
   Future<void> _loadThemeMode() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
       isDarkMode = prefs.getBool('isDarkMode') ?? false;
     });
@@ -111,13 +116,16 @@ class _PumpScoutAppState extends State<PumpScoutApp> {
         brightness: isDarkMode ? Brightness.dark : Brightness.light,
         useMaterial3: true,
       ),
-      home: AuthGate(isDarkMode: isDarkMode, toggleTheme: toggleTheme),
+      home: FirebaseStartupGate(
+        isDarkMode: isDarkMode,
+        toggleTheme: toggleTheme,
+      ),
     );
   }
 }
 
-class AuthGate extends StatelessWidget {
-  const AuthGate({
+class FirebaseStartupGate extends StatelessWidget {
+  const FirebaseStartupGate({
     super.key,
     required this.isDarkMode,
     required this.toggleTheme,
@@ -128,26 +136,164 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<FirebaseApp>(
+      future: firebaseInitialization,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const StartupLoadingScreen();
+        }
+
+        if (snapshot.hasError) {
+          return StartupErrorScreen(error: snapshot.error);
+        }
+
+        return AuthGate(isDarkMode: isDarkMode, toggleTheme: toggleTheme);
+      },
+    );
+  }
+}
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({
+    super.key,
+    required this.isDarkMode,
+    required this.toggleTheme,
+  });
+
+  final bool isDarkMode;
+  final VoidCallback toggleTheme;
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool authWaitExpired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        authWaitExpired = true;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          if (!authWaitExpired) return const StartupLoadingScreen();
+          return _buildScreenForUser(FirebaseAuth.instance.currentUser);
         }
 
-        final user = snapshot.data;
-        if (user == null) {
-          return const LoginPage();
-        }
-
-        if (requiresEmailVerification(user) && !user.emailVerified) {
-          return const LoginPage();
-        }
-
-        return HomePage(isDarkMode: isDarkMode, toggleTheme: toggleTheme);
+        return _buildScreenForUser(snapshot.data);
       },
+    );
+  }
+
+  Widget _buildScreenForUser(User? user) {
+    if (user == null) {
+      return const LoginPage();
+    }
+
+    if (requiresEmailVerification(user) && !user.emailVerified) {
+      return const LoginPage();
+    }
+
+    return HomePage(
+      isDarkMode: widget.isDarkMode,
+      toggleTheme: widget.toggleTheme,
+    );
+  }
+}
+
+class StartupLoadingScreen extends StatelessWidget {
+  const StartupLoadingScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Material(
+      color: Color(0xFFFFF7FB),
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: CircularProgressIndicator(
+                  color: Color(0xFFE94B5A),
+                  strokeWidth: 4,
+                ),
+              ),
+              SizedBox(height: 18),
+              Text(
+                'Loading PumpScout...',
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class StartupErrorScreen extends StatelessWidget {
+  const StartupErrorScreen({super.key, required this.error});
+
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.error_outline,
+                  color: Color(0xFFE94B5A),
+                  size: 42,
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'PumpScout could not start',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF5F6F85),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

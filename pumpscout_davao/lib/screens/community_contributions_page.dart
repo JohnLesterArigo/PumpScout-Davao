@@ -596,9 +596,10 @@ class _CommunityContributionsPageState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _psPageColor(context),
-      appBar: const _FullScreenSheetAppBar(title: 'Community'),
-      body: _buildBody(),
+      backgroundColor: _psIsDark(context)
+          ? _psPageColor(context)
+          : const Color(0xFFF5F8FF),
+      body: SafeArea(child: _buildBody()),
     );
   }
 
@@ -623,80 +624,308 @@ class _CommunityContributionsPageState
       );
     }
 
-    if (_items.isEmpty) {
-      return RefreshIndicator(
-        color: _psRed,
-        onRefresh: _reloadContributions,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+    return Stack(
+      children: [
+        RefreshIndicator(
+          color: _psRed,
+          onRefresh: _reloadContributions,
+          child: ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 112),
+            itemCount: _items.length + 2,
+            separatorBuilder: (_, index) =>
+                SizedBox(height: index <= 1 ? 12 : 8),
+            itemBuilder: (context, index) {
+              if (index == 0) return _communityHeader();
+              if (index == 1) {
+                return _items.isEmpty
+                    ? _communityEmptyCard()
+                    : _communityInfoBanner();
+              }
+              return _communityCard(_items[index - 2]);
+            },
+          ),
+        ),
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: 10,
+          child: _reportFuelPricePanel(),
+        ),
+      ],
+    );
+  }
+
+  Widget _communityHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            _communityFilterBar(),
-            const SizedBox(height: 18),
-            Center(
-              child: Text(
-                _communityEmptyMessage(),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: _psMutedTextColor(context)),
+            IconButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.arrow_back),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Community',
+                    style: TextStyle(
+                      color: _psPrimaryTextColor(context),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    'Real fuel prices from real drivers',
+                    style: TextStyle(
+                      color: _psMutedTextColor(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
-      );
-    }
+        const SizedBox(height: 12),
+        _communityFilterBar(),
+      ],
+    );
+  }
 
-    return RefreshIndicator(
-      color: _psRed,
-      onRefresh: _reloadContributions,
-      child: ListView.separated(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        itemCount: _items.length + 1,
-        separatorBuilder: (_, index) => SizedBox(height: index == 0 ? 14 : 12),
-        itemBuilder: (context, index) {
-          if (index == 0) return _communityFilterBar();
-          return _communityCard(_items[index - 1]);
-        },
+  Widget _communityInfoBanner() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.verified, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _communityFilterSubtitle(),
+                  style: const TextStyle(
+                    color: Color(0xFF2563EB),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  'Help the community save more',
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _communityEmptyCard() {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Text(
+        _communityEmptyMessage(),
+        textAlign: TextAlign.center,
+        style: TextStyle(color: _psMutedTextColor(context)),
       ),
     );
   }
 
   Widget _communityFilterBar() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'nearby', label: Text('Nearby')),
-              ButtonSegment(value: 'latest', label: Text('Latest')),
-              ButtonSegment(value: 'cheapest', label: Text('Cheapest')),
-              ButtonSegment(value: 'all', label: Text('All Davao')),
-            ],
-            selected: {_communityFilter},
-            onSelectionChanged: (selection) {
-              _setCommunityFilter(selection.first);
-            },
-            showSelectedIcon: false,
-            style: ButtonStyle(
-              visualDensity: VisualDensity.compact,
-              textStyle: WidgetStateProperty.all(
-                const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+    final filters = [
+      ('nearby', Icons.location_on, 'Nearby'),
+      ('latest', Icons.schedule, 'Latest'),
+      ('cheapest', Icons.local_offer, 'Cheapest'),
+      ('all', Icons.apartment, 'All Davao'),
+    ];
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final filter in filters) ...[
+            _communityFilterChip(
+              value: filter.$1,
+              icon: filter.$2,
+              label: filter.$3,
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _communityFilterChip({
+    required String value,
+    required IconData icon,
+    required String label,
+  }) {
+    final selected = _communityFilter == value;
+    return InkWell(
+      onTap: () => _setCommunityFilter(value),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF2563EB) : _psPanelColor(context),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? const Color(0xFF2563EB) : _psBorderColor(context),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: selected ? 0.10 : 0.04),
+              blurRadius: selected ? 14 : 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: selected ? Colors.white : _psMutedTextColor(context),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : _psPrimaryTextColor(context),
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
               ),
             ),
-          ),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          _communityFilterSubtitle(),
-          style: TextStyle(
-            color: _psMutedTextColor(context),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  Widget _reportFuelPricePanel() {
+    return InkWell(
+      onTap: _openReportMap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        height: 62,
+        padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF2563EB), Color(0xFF0EA5E9)],
           ),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2563EB).withValues(alpha: 0.28),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
         ),
-      ],
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.add, color: Color(0xFF2563EB), size: 24),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Report fuel price',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    'Help others save',
+                    style: TextStyle(
+                      color: Color(0xDFFFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Image.asset(
+              'assets/images/car.png',
+              width: 88,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) {
+                return const Icon(
+                  Icons.directions_car,
+                  color: Colors.white,
+                  size: 36,
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openReportMap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) {
+          return Scaffold(
+            backgroundColor: _psPageColor(context),
+            appBar: AppBar(
+              title: const Text('Report fuel price'),
+              backgroundColor: _psPageColor(context),
+              foregroundColor: _psPrimaryTextColor(context),
+              elevation: 0,
+            ),
+            body: MapContainer(isDarkMode: _psIsDark(context)),
+          );
+        },
+      ),
     );
   }
 
@@ -722,11 +951,18 @@ class _CommunityContributionsPageState
   Widget _communityCard(CommunityContribution item) {
     final distanceLabel = _communityDistanceLabel(item);
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _psPanelColor(context),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _psBorderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -734,19 +970,33 @@ class _CommunityContributionsPageState
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _communityBrandLogo(item),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _communityStationTitle(item),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _psPrimaryTextColor(context),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _communityStationTitle(item),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _psPrimaryTextColor(context),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.verified,
+                          color: Color(0xFF2563EB),
+                          size: 16,
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 3),
                     Text(
@@ -767,13 +1017,13 @@ class _CommunityContributionsPageState
                 ),
               ),
               const SizedBox(width: 8),
-              buildContributorTrustBadgeChip(context, item.trustBadge),
+              _communityTrustPill(item),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           if (item.photoUrl?.isNotEmpty == true) ...[
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(12),
               child: AspectRatio(
                 aspectRatio: 16 / 9,
                 child: Image.network(
@@ -793,47 +1043,54 @@ class _CommunityContributionsPageState
             ),
             const SizedBox(height: 12),
           ],
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          GridView.count(
+            crossAxisCount: 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 2.25,
             children: [
-              _communityPriceChip('Gas', item.gasoline),
-              _communityPriceChip('Diesel', item.diesel),
-              _communityPriceChip('Premium', item.premium),
+              for (final fuel in _communityFuelItems(item))
+                _communityPriceChip(fuel),
             ],
           ),
-          const SizedBox(height: 2),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
+          const SizedBox(height: 8),
+          Row(
             children: [
-              _reactionButton(
-                icon: Icons.thumb_up_alt_outlined,
-                label: item.visibleLikeCount > 0
-                    ? '${item.visibleLikeCount}'
-                    : 'Like',
-                selected: item.myReaction == 'like',
-                onPressed: () => saveReaction(item, 'like'),
-              ),
-              _reactionButton(
-                icon: Icons.thumb_down_alt_outlined,
-                label: 'Disagree',
-                selected: item.myReaction == 'disagree',
-                onPressed: () => saveReaction(item, 'disagree'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _isSavingReaction
-                    ? null
-                    : () => promptFeedback(item),
-                icon: const Icon(Icons.chat_bubble_outline, size: 15),
-                label: Text(
-                  item.commentThreadCount > 0
-                      ? 'Comment ${item.commentThreadCount}'
-                      : 'Comment',
+              Expanded(
+                child: _reactionButton(
+                  icon: item.myReaction == 'like'
+                      ? Icons.favorite
+                      : Icons.favorite_border,
+                  label: item.myReaction == 'like'
+                      ? 'Liked (${item.visibleLikeCount})'
+                      : 'Like (${item.visibleLikeCount})',
+                  selected: item.myReaction == 'like',
+                  onPressed: () => saveReaction(item, 'like'),
                 ),
-                style: _communityActionButtonStyle(
-                  foregroundColor: _psPrimaryTextColor(context),
-                  borderColor: _psBorderColor(context),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _reactionButton(
+                  icon: Icons.thumb_down_alt_outlined,
+                  label: 'Disagree (${item.disagreeCount})',
+                  selected: item.myReaction == 'disagree',
+                  onPressed: () => saveReaction(item, 'disagree'),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _isSavingReaction
+                      ? null
+                      : () => promptFeedback(item),
+                  icon: const Icon(Icons.chat_bubble_outline, size: 14),
+                  label: Text('Comment (${item.commentThreadCount})'),
+                  style: _communityActionButtonStyle(
+                    foregroundColor: _psPrimaryTextColor(context),
+                    borderColor: _psBorderColor(context),
+                  ),
                 ),
               ),
             ],
@@ -934,6 +1191,81 @@ class _CommunityContributionsPageState
     return '$brand $station';
   }
 
+  Widget _communityBrandLogo(CommunityContribution item) {
+    final logoPath = _communityBrandLogoAsset(item.brand);
+    return Container(
+      width: 46,
+      height: 46,
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: logoPath == null
+          ? Center(
+              child: Text(
+                _communityBrandInitial(item),
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            )
+          : ClipOval(
+              child: Image.asset(
+                logoPath,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => Center(
+                  child: Text(
+                    _communityBrandInitial(item),
+                    style: const TextStyle(
+                      color: Color(0xFF0F172A),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
+
+  String _communityBrandInitial(CommunityContribution item) {
+    final source = item.brand.trim().isNotEmpty
+        ? item.brand.trim()
+        : item.stationName.trim();
+    if (source.isEmpty) return 'P';
+    return source.characters.first.toUpperCase();
+  }
+
+  Widget _communityTrustPill(CommunityContribution item) {
+    final trust = item.trustBadge.score.clamp(0, 100);
+    final good = trust >= 70;
+    final color = good ? const Color(0xFF16A34A) : const Color(0xFFE94B5A);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_awesome, color: color, size: 13),
+          const SizedBox(width: 4),
+          Text(
+            'Trust score $trust%',
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _communityReplyTile(CommunityFeedbackReply reply) {
     return Container(
       width: double.infinity,
@@ -972,21 +1304,160 @@ class _CommunityContributionsPageState
     );
   }
 
-  Widget _communityPriceChip(String label, double? value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: _psSoftPanelColor(context),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _psBorderColor(context)),
-      ),
-      child: Text(
-        '$label: ${value == null ? '--' : 'PHP ${value.toStringAsFixed(2)}'}',
-        style: TextStyle(
-          color: _psPrimaryTextColor(context),
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
+  List<_CommunityFuelDisplayItem> _communityFuelItems(
+    CommunityContribution item,
+  ) {
+    final fuels = <_CommunityFuelDisplayItem>[];
+
+    for (final entry in item.fuelProducts.entries) {
+      if (entry.value <= 0) continue;
+      fuels.add(
+        _CommunityFuelDisplayItem(
+          label: entry.key,
+          price: entry.value,
+          category: _communityFuelCategory(entry.key),
         ),
+      );
+    }
+
+    if (fuels.isEmpty) {
+      void addBase(String key, double? value) {
+        if (value == null || value <= 0) return;
+        fuels.add(
+          _CommunityFuelDisplayItem(
+            label: _communityFuelLabelForBrand(item.brand, key),
+            price: value,
+            category: key,
+          ),
+        );
+      }
+
+      addBase('gasoline', item.gasoline);
+      addBase('diesel', item.diesel);
+      addBase('premium', item.premium);
+    }
+
+    return fuels;
+  }
+
+  String _communityFuelLabelForBrand(String brand, String fuelType) {
+    final normalized = brand.toLowerCase();
+    if (normalized.contains('shell')) {
+      return switch (fuelType) {
+        'diesel' => 'FuelSave Diesel',
+        'premium' => 'V-Power Gasoline',
+        _ => 'FuelSave Gasoline',
+      };
+    }
+    if (normalized.contains('petron')) {
+      return switch (fuelType) {
+        'diesel' => 'Turbo Diesel',
+        'premium' => 'Blaze 100',
+        _ => 'Xtra Advance',
+      };
+    }
+    if (normalized.contains('seaoil') || normalized.contains('sea oil')) {
+      return switch (fuelType) {
+        'diesel' => 'Exceed Diesel',
+        'premium' => 'Extreme 95',
+        _ => 'Extreme U',
+      };
+    }
+    if (normalized.contains('caltex') || normalized.contains('caltext')) {
+      return switch (fuelType) {
+        'diesel' => 'Caltex Diesel',
+        'premium' => 'Platinum',
+        _ => 'Silver',
+      };
+    }
+    if (normalized.contains('unioil')) {
+      return switch (fuelType) {
+        'diesel' => 'Euro 5 Diesel',
+        'premium' => 'Premium',
+        _ => 'Euro 5 Gasoline',
+      };
+    }
+    return switch (fuelType) {
+      'diesel' => 'Diesel',
+      'premium' => 'Premium',
+      _ => 'Gasoline',
+    };
+  }
+
+  String _communityFuelCategory(String label) {
+    final normalized = label.toLowerCase();
+    if (normalized.contains('diesel')) return 'diesel';
+    if (normalized.contains('premium') ||
+        normalized.contains('v-power') ||
+        normalized.contains('blaze') ||
+        normalized.contains('platinum') ||
+        normalized.contains('extreme 95')) {
+      return 'premium';
+    }
+    return 'gasoline';
+  }
+
+  String? _communityBrandLogoAsset(String brand) {
+    final normalized = brand.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (normalized.contains('shell')) return 'assets/images/Shell_logo.png';
+    if (normalized.contains('petron')) return 'assets/images/petron_logo.jpg';
+    if (normalized.contains('seaoil')) {
+      return 'assets/images/seaOil_Logo.png';
+    }
+    if (normalized.contains('caltex') || normalized.contains('caltext')) {
+      return 'assets/images/caltext_logo.jpg';
+    }
+    if (normalized.contains('unioil')) return 'assets/images/uniOil_logo.png';
+    if (normalized.contains('mygas')) return 'assets/images/myGas_logo.png';
+    return null;
+  }
+
+  Widget _communityPriceChip(_CommunityFuelDisplayItem item) {
+    final color = switch (item.category) {
+      'diesel' => const Color(0xFF2563EB),
+      'premium' => const Color(0xFFF97316),
+      _ => const Color(0xFF10B981),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.local_gas_station, color: color, size: 16),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'PHP ${item.price.toStringAsFixed(2)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _psPrimaryTextColor(context),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1025,4 +1496,16 @@ class _CommunityContributionsPageState
       textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
     );
   }
+}
+
+class _CommunityFuelDisplayItem {
+  const _CommunityFuelDisplayItem({
+    required this.label,
+    required this.price,
+    required this.category,
+  });
+
+  final String label;
+  final double price;
+  final String category;
 }
