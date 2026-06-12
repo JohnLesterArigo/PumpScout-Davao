@@ -13,12 +13,18 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart' as picker;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
 
 part 'models/app_models.dart';
 part 'screens/login_page.dart';
 part 'screens/home_page.dart';
+part 'screens/community_contributions_page.dart';
+part 'screens/notification_inbox_page.dart';
+part 'screens/my_contributions_page.dart';
+part 'screens/admin_dashboard_page.dart';
+part 'screens/fuel_consumption_editor_sheet.dart';
 part 'widgets/fuel_calculator_panel.dart';
 part 'widgets/map_container.dart';
 part 'widgets/price_trend_painter.dart';
@@ -74,10 +80,27 @@ class PumpScoutApp extends StatefulWidget {
 class _PumpScoutAppState extends State<PumpScoutApp> {
   bool isDarkMode = false;
 
-  void toggleTheme() {
+  @override
+  void initState() {
+    super.initState();
+    _loadThemeMode();
+  }
+
+  Future<void> _loadThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      isDarkMode = prefs.getBool('isDarkMode') ?? false;
+    });
+  }
+
+  Future<void> toggleTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+
     setState(() {
       isDarkMode = !isDarkMode;
     });
+
+    await prefs.setBool('isDarkMode', isDarkMode);
   }
 
   @override
