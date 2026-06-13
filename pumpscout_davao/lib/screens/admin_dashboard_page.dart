@@ -83,7 +83,7 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
         return AlertDialog(
           title: const Text('Archive contribution?'),
           content: Text(
-            'This hides ${report.stationName} from the admin ${report.status} list, but keeps the record for user history, trust scores, and audit review.',
+            'This hides ${report.stationName} from the admin ${report.status} list, but keeps the record for user history, experience progress, and audit review.',
           ),
           actions: [
             TextButton(
@@ -200,7 +200,7 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
       if (status == 'verified') {
         final contributorId = report.userId;
         if (contributorId != null && contributorId.isNotEmpty) {
-          await persistContributorTrustForUser(contributorId);
+          await persistContributorExperienceForUser(contributorId);
         }
         await widget.onChanged();
       }
@@ -844,17 +844,11 @@ class _AdminDashboardPageState extends State<_AdminDashboardPage> {
   }
 }
 
-Widget buildContributorTrustBadgeChip(
+Widget buildContributorLevelChip(
   BuildContext context,
-  ContributorTrustBadge badge,
+  ContributorExperience experience,
 ) {
-  final color = badge.score >= 80
-      ? const Color(0xFF168A4A)
-      : badge.score >= 60
-      ? const Color(0xFF1D70B8)
-      : badge.score >= 40
-      ? const Color(0xFFB54708)
-      : _psRed;
+  const color = Color(0xFF2563EB);
 
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
@@ -866,10 +860,10 @@ Widget buildContributorTrustBadgeChip(
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.auto_awesome, size: 14, color: color),
+        Icon(Icons.workspace_premium_outlined, size: 14, color: color),
         const SizedBox(width: 5),
         Text(
-          'Trust score ${badge.score}%',
+          'Level ${experience.level} - ${experience.title}',
           style: TextStyle(
             color: color,
             fontSize: 11,

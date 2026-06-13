@@ -21,6 +21,7 @@ part 'models/app_models.dart';
 part 'screens/login_page.dart';
 part 'screens/home_page.dart';
 part 'screens/community_contributions_page.dart';
+part 'screens/top_contributors_page.dart';
 part 'screens/notification_inbox_page.dart';
 part 'screens/my_contributions_page.dart';
 part 'screens/admin_dashboard_page.dart';
@@ -36,7 +37,7 @@ part 'services/contribution_classifier.dart';
 part 'services/regional_price_model.dart';
 part 'services/price_forecast_service.dart';
 part 'services/trained_price_forecast_service.dart';
-part 'services/contributor_trust_service.dart';
+part 'services/contributor_experience_service.dart';
 part 'utils/geo_utils.dart';
 part 'utils/auth_errors.dart';
 part 'utils/formatters.dart';
@@ -110,11 +111,56 @@ class _PumpScoutAppState extends State<PumpScoutApp> {
 
   @override
   Widget build(BuildContext context) {
+    final brightness = isDarkMode ? Brightness.dark : Brightness.light;
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: _psRed,
+      brightness: brightness,
+      surface: isDarkMode ? _psPanelBlue : Colors.white,
+    );
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        brightness: isDarkMode ? Brightness.dark : Brightness.light,
+        brightness: brightness,
         useMaterial3: true,
+        colorScheme: colorScheme,
+        scaffoldBackgroundColor: isDarkMode ? _psDeepBlue : Colors.white,
+        canvasColor: isDarkMode ? _psPanelBlue : Colors.white,
+        cardColor: isDarkMode ? _psPanelBlue : Colors.white,
+        dividerColor: isDarkMode ? _psDarkBorder : _psLightBorder,
+        dialogTheme: DialogThemeData(
+          backgroundColor: isDarkMode ? _psPanelBlue : Colors.white,
+        ),
+        bottomSheetTheme: BottomSheetThemeData(
+          backgroundColor: isDarkMode ? _psPanelBlue : Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: isDarkMode ? _psDeepBlue : Colors.white,
+          foregroundColor: isDarkMode ? Colors.white : _psDeepBlue,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: isDarkMode ? _psPanelBlue : Colors.white,
+          indicatorColor: _psRed.withValues(alpha: 0.16),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: isDarkMode ? _psSoftPanel : _psLightSoftPanel,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(
+              color: isDarkMode ? _psDarkBorder : _psLightBorder,
+            ),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(
+              color: isDarkMode ? _psDarkBorder : _psLightBorder,
+            ),
+          ),
+        ),
       ),
       home: FirebaseStartupGate(
         isDarkMode: isDarkMode,

@@ -1,14 +1,15 @@
 part of '../main.dart';
 
-const _psDeepBlue = ui.Color.fromARGB(255, 0, 0, 0);
-const _psPanelBlue = Color(0xFF0E2238);
-const _psSoftPanel = Color(0xFF132A43);
+const _psDeepBlue = Color(0xFF191B20);
+const _psPanelBlue = Color(0xFF23262C);
+const _psSoftPanel = Color(0xFF2C3037);
 const _psRed = Color(0xFFE94B5A);
-const _psMutedText = Color(0xB8FFFFFF);
+const _psMutedText = Color(0xFFADB4BF);
 const _psLightPanel = Color(0xFFFFFFFF);
 const _psLightSoftPanel = Color(0xFFF6F8FB);
 const _psLightMutedText = Color(0xFF5F6F85);
 const _psLightBorder = Color(0xFFE3E8EF);
+const _psDarkBorder = Color(0xFF3A3F48);
 
 bool _psIsDark(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark;
@@ -29,7 +30,7 @@ Color _psMutedTextColor(BuildContext context) =>
     _psIsDark(context) ? _psMutedText : _psLightMutedText;
 
 Color _psBorderColor(BuildContext context) =>
-    _psIsDark(context) ? Colors.white.withValues(alpha: 0.08) : _psLightBorder;
+    _psIsDark(context) ? _psDarkBorder : _psLightBorder;
 
 class HomePage extends StatefulWidget {
   final bool isDarkMode;
@@ -540,89 +541,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   void showContributorsFrame() {
-    final currentUser = FirebaseAuth.instance.currentUser;
-
     Navigator.of(context).push(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (context) {
-          return FutureBuilder<List<ContributorSummary>>(
-            future: loadContributorSummaries(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  appBar: _FullScreenSheetAppBar(title: 'Top Contributors'),
-                  body: Center(child: CircularProgressIndicator()),
-                );
-              }
-
-              if (snapshot.hasError) {
-                debugPrint('Contributor load failed: ${snapshot.error}');
-              }
-
-              final contributors =
-                  snapshot.data ?? const <ContributorSummary>[];
-
-              return Scaffold(
-                appBar: const _FullScreenSheetAppBar(title: 'Top Contributors'),
-                body: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Center(
-                          child: Text(
-                            'Most Contributor Users',
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        const Divider(thickness: 2, color: Colors.black),
-                        if (snapshot.hasError)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 28),
-                            child: Center(
-                              child: Text(
-                                'Could not load contributors.\n${snapshot.error}',
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          )
-                        else if (contributors.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 28),
-                            child: Center(
-                              child: Text('No registered users yet.'),
-                            ),
-                          )
-                        else
-                          Expanded(
-                            child: ListView.separated(
-                              itemCount: contributors.length,
-                              separatorBuilder: (_, _) =>
-                                  const SizedBox(height: 4),
-                              itemBuilder: (context, index) {
-                                final contributor = contributors[index];
-                                return _contributorRow(
-                                  contributor,
-                                  rank: index + 1,
-                                  isCurrentUser:
-                                      currentUser != null &&
-                                      contributor.userId == currentUser.uid,
-                                );
-                              },
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          );
-        },
+        builder: (_) => const _TopContributorsPage(),
       ),
     );
   }
@@ -675,173 +597,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<List<ContributorSummary>> loadContributorSummaries() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    final contributors = <String, _ContributorAccumulator>{};
-
-    if (currentUser != null) {
-      contributors[currentUser.uid] = _ContributorAccumulator(
-        currentUser.displayName?.trim().isNotEmpty == true
-            ? currentUser.displayName!.trim()
-            : currentUser.email ?? 'You',
-        reportCount: 0,
-      );
-    }
-
-    try {
-      final usersSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .get();
-
-      for (final doc in usersSnapshot.docs) {
-        final data = doc.data();
-        final userId = _stringField(data, 'uid', fallback: doc.id);
-        final displayName = _stringField(
-          data,
-          'displayName',
-          fallback: _stringField(data, 'email', fallback: 'PumpScout User'),
-        );
-
-        contributors[userId] = _ContributorAccumulator(
-          displayName,
-          reportCount: contributors[userId]?.reportCount ?? 0,
-        );
-      }
-    } catch (error) {
-      debugPrint('Users leaderboard load failed: $error');
-    }
-
-    try {
-      final reportsSnapshot = await FirebaseFirestore.instance
-          .collection('priceReports')
-          .where('status', isEqualTo: 'verified')
-          .get();
-
-      for (final doc in reportsSnapshot.docs) {
-        final data = doc.data();
-        final userId = _stringField(
-          data,
-          'userId',
-          fallback: _stringField(data, 'userEmail', fallback: 'anonymous'),
-        );
-        final displayName = _stringField(
-          data,
-          'userDisplayName',
-          fallback: _stringField(
-            data,
-            'userEmail',
-            fallback: userId == 'anonymous'
-                ? 'Anonymous user'
-                : 'PumpScout User',
-          ),
-        );
-
-        contributors.update(userId, (item) {
-          item.reportCount += 1;
-          return item;
-        }, ifAbsent: () => _ContributorAccumulator(displayName));
-      }
-    } catch (error) {
-      debugPrint('Price report leaderboard load failed: $error');
-    }
-
-    final summaries =
-        contributors.entries
-            .map(
-              (entry) => ContributorSummary(
-                userId: entry.key,
-                name: entry.value.name,
-                reportCount: entry.value.reportCount,
-              ),
-            )
-            .toList()
-          ..sort((a, b) {
-            final countCompare = b.reportCount.compareTo(a.reportCount);
-            if (countCompare != 0) return countCompare;
-            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-          });
-
-    return summaries;
-  }
-
-  Widget _contributorRow(
-    ContributorSummary contributor, {
-    required int rank,
-    required bool isCurrentUser,
-  }) {
-    final rowContent = Row(
-      children: [
-        SizedBox(width: 54, child: _rankBadge(rank)),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            isCurrentUser ? '${contributor.name} (you)' : contributor.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: isCurrentUser ? FontWeight.w800 : FontWeight.w600,
-              color: isCurrentUser ? Colors.white : null,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '${contributor.reportCount}',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: isCurrentUser ? Colors.white : const Color(0xFF1E8E3E),
-          ),
-        ),
-      ],
-    );
-
-    if (!isCurrentUser) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: rowContent,
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF7457F6),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: rowContent,
-    );
-  }
-
-  Widget _rankBadge(int rank) {
-    final asset = switch (rank) {
-      1 => 'assets/images/11st.png',
-      2 => 'assets/images/22nd image.png',
-      3 => 'assets/images/33rd.png',
-      _ => null,
-    };
-
-    if (asset != null) {
-      return Image.asset(
-        asset,
-        width: 48,
-        height: 48,
-        fit: BoxFit.contain,
-        errorBuilder: (_, _, _) => Text(
-          '$rank',
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-      );
-    }
-
-    return Text(
-      '$rank',
-      textAlign: TextAlign.center,
-      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-    );
-  }
-
   Future<UserProfileSummary> loadProfileSummary(User user) async {
     final userDoc = await FirebaseFirestore.instance
         .collection('users')
@@ -881,7 +636,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     final feedbackByReportId = await loadFeedbackAggregatesByReportId();
-    final trustBadge = await buildContributorTrustBadgeForUser(
+    final experience = await buildContributorExperienceForUser(
       contributorId: user.uid,
       feedbackByReportId: feedbackByReportId,
     );
@@ -899,7 +654,7 @@ class _HomePageState extends State<HomePage> {
       reportCount: verifiedReportCount,
       role: _stringField(userData, 'role', fallback: 'user'),
       lastReportAt: lastReportAt,
-      trustBadge: trustBadge,
+      experience: experience,
     );
   }
 
@@ -991,7 +746,7 @@ class _HomePageState extends State<HomePage> {
                   ).copyWith(color: _psMutedTextColor(context)),
                 ),
                 const SizedBox(height: 10),
-                buildContributorTrustBadgeChip(context, profile.trustBadge),
+                buildContributorLevelChip(context, profile.experience),
               ],
             ),
           ),
@@ -1932,10 +1687,14 @@ class _HomePageState extends State<HomePage> {
             borderRadius: BorderRadius.circular(22),
             gradient: LinearGradient(
               colors: _psIsDark(context)
-                  ? const [Color(0xFF0E2238), Color(0xFF142F4F)]
+                  ? const [_psPanelBlue, _psSoftPanel]
                   : const [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
             ),
-            border: Border.all(color: const Color(0xFF93C5FD)),
+            border: Border.all(
+              color: _psIsDark(context)
+                  ? _psDarkBorder
+                  : const Color(0xFF93C5FD),
+            ),
             boxShadow: [
               BoxShadow(
                 color: const Color(0xFF2563EB).withValues(alpha: 0.10),

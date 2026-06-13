@@ -197,13 +197,6 @@ class _MyContributionsPage extends StatelessWidget {
   }
 }
 
-class _ContributorAccumulator {
-  _ContributorAccumulator(this.name, {this.reportCount = 1});
-
-  final String name;
-  int reportCount;
-}
-
 class _RejectContributionDialog extends StatefulWidget {
   const _RejectContributionDialog({required this.stationName});
 

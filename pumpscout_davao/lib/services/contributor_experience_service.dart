@@ -209,53 +209,52 @@ List<CommunityFeedbackReply> _feedbackReplies(Map<String, dynamic> data) {
   return replies;
 }
 
-ContributorTrustBadge computeContributorTrustBadge({
-  required int verifiedReportCount,
-  DateTime? lastVerifiedReportAt,
-  required int communityLikeCount,
-  required int communityDisagreeCount,
-  required int substantiveFeedbackCount,
-  List<String> aiClassifications = const <String>[],
-}) {
-  final score = (verifiedReportCount * 10).clamp(0, 100);
-  final label = 'Trust score';
+const int _xpPerVerifiedReport = 100;
+const int _xpPerHelpfulVote = 10;
 
-  final reason = buildContributorTrustReason(
-    verifiedReportCount: verifiedReportCount,
-    communityLikeCount: communityLikeCount,
-    communityDisagreeCount: communityDisagreeCount,
-    substantiveFeedbackCount: substantiveFeedbackCount,
-    aiClassifications: aiClassifications,
+ContributorExperience computeContributorExperience({
+  required int verifiedReportCount,
+  required int helpfulVoteCount,
+}) {
+  final xp =
+      verifiedReportCount * _xpPerVerifiedReport +
+      helpfulVoteCount * _xpPerHelpfulVote;
+  var level = 1;
+  var currentLevelXp = 0;
+  var nextLevelXp = 250;
+
+  while (xp >= nextLevelXp) {
+    level += 1;
+    currentLevelXp = nextLevelXp;
+    nextLevelXp += 250 + ((level - 2) * 100);
+  }
+
+  return ContributorExperience(
+    xp: xp,
+    level: level,
+    title: contributorLevelTitle(level),
+    currentLevelXp: currentLevelXp,
+    nextLevelXp: nextLevelXp,
   );
-
-  return ContributorTrustBadge(label: label, score: score, reason: reason);
 }
 
-String buildContributorTrustReason({
-  required int verifiedReportCount,
-  required int communityLikeCount,
-  required int communityDisagreeCount,
-  required int substantiveFeedbackCount,
-  List<String> aiClassifications = const <String>[],
-}) {
-  final nextMilestone = verifiedReportCount >= 10
-      ? 'Maximum trust score reached.'
-      : '${10 - verifiedReportCount} more approved contribution${10 - verifiedReportCount == 1 ? '' : 's'} to reach 100%.';
-
-  return '$verifiedReportCount admin-approved contribution${verifiedReportCount == 1 ? '' : 's'}. '
-      'Trust increases after an admin verifies a submitted fuel price. '
-      '$nextMilestone';
+String contributorLevelTitle(int level) {
+  if (level >= 10) return 'Legend';
+  if (level >= 7) return 'Pathfinder';
+  if (level >= 5) return 'Expert Scout';
+  if (level >= 3) return 'Rising Contributor';
+  if (level >= 2) return 'Active Contributor';
+  return 'New Contributor';
 }
 
-Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
+Future<ContributorExperience> buildContributorExperienceForUser({
   required String contributorId,
   required Map<String, ReportFeedbackAggregate> feedbackByReportId,
 }) async {
   if (contributorId.isEmpty) {
-    return const ContributorTrustBadge(
-      label: 'Trust score',
-      score: 0,
-      reason: 'Contributor identity is incomplete.',
+    return computeContributorExperience(
+      verifiedReportCount: 0,
+      helpfulVoteCount: 0,
     );
   }
 
@@ -267,68 +266,41 @@ Future<ContributorTrustBadge> buildContributorTrustBadgeForUser({
         .where('status', isEqualTo: 'verified')
         .get();
   } catch (error) {
-    debugPrint('Contributor trust query failed: $error');
-    return const ContributorTrustBadge(
-      label: 'Trust score',
-      score: 0,
-      reason:
-          'Trust score will update after admin-approved contributions are visible.',
+    debugPrint('Contributor experience query failed: $error');
+    return computeContributorExperience(
+      verifiedReportCount: 0,
+      helpfulVoteCount: 0,
     );
   }
 
-  var communityLikeCount = 0;
-  var communityDisagreeCount = 0;
-  var substantiveFeedbackCount = 0;
-  DateTime? lastVerifiedReportAt;
-  final aiClassifications = <String>[];
+  var helpfulVoteCount = 0;
 
   for (final doc in reports.docs) {
-    final data = doc.data();
-    final createdAt = _dateTimeField(data, 'createdAt');
-    if (createdAt != null &&
-        (lastVerifiedReportAt == null ||
-            createdAt.isAfter(lastVerifiedReportAt))) {
-      lastVerifiedReportAt = createdAt;
-    }
-
-    final aiLabel = _stringField(
-      data,
-      'aiClassification',
-      fallback: 'needs_review',
-    );
-    if (aiLabel.isNotEmpty) aiClassifications.add(aiLabel);
-
     final feedback = feedbackByReportId[doc.id];
     if (feedback == null) continue;
-    communityLikeCount += feedback.likeCount;
-    communityDisagreeCount += feedback.disagreeCount;
-    substantiveFeedbackCount += feedback.substantiveFeedbackCount;
+    helpfulVoteCount += feedback.likeCount;
   }
 
-  return computeContributorTrustBadge(
+  return computeContributorExperience(
     verifiedReportCount: reports.docs.length,
-    lastVerifiedReportAt: lastVerifiedReportAt,
-    communityLikeCount: communityLikeCount,
-    communityDisagreeCount: communityDisagreeCount,
-    substantiveFeedbackCount: substantiveFeedbackCount,
-    aiClassifications: aiClassifications,
+    helpfulVoteCount: helpfulVoteCount,
   );
 }
 
-Future<void> persistContributorTrustForUser(String contributorId) async {
+Future<void> persistContributorExperienceForUser(String contributorId) async {
   if (contributorId.isEmpty) return;
 
   final feedbackByReportId = await loadFeedbackAggregatesByReportId();
-  final trust = await buildContributorTrustBadgeForUser(
+  final experience = await buildContributorExperienceForUser(
     contributorId: contributorId,
     feedbackByReportId: feedbackByReportId,
   );
 
   await FirebaseFirestore.instance.collection('users').doc(contributorId).set({
-    'trustScore': trust.score,
-    'trustLabel': trust.label,
-    'trustReason': trust.reason,
-    'trustUpdatedAt': Timestamp.now(),
+    'experiencePoints': experience.xp,
+    'contributorLevel': experience.level,
+    'contributorTitle': experience.title,
+    'experienceUpdatedAt': Timestamp.now(),
     'verifiedReportCount': await _verifiedReportCount(contributorId),
   }, SetOptions(merge: true));
 }

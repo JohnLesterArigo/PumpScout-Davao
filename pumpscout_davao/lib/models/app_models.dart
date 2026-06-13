@@ -208,7 +208,7 @@ class UserProfileSummary {
     required this.reportCount,
     required this.role,
     this.lastReportAt,
-    required this.trustBadge,
+    required this.experience,
   });
 
   final String displayName;
@@ -219,7 +219,7 @@ class UserProfileSummary {
   final int reportCount;
   final String role;
   final DateTime? lastReportAt;
-  final ContributorTrustBadge trustBadge;
+  final ContributorExperience experience;
 
   bool get isAdmin => role.toLowerCase() == 'admin';
 }
@@ -229,11 +229,15 @@ class ContributorSummary {
     required this.userId,
     required this.name,
     required this.reportCount,
+    required this.helpfulVoteCount,
+    required this.experience,
   });
 
   final String userId;
   final String name;
   final int reportCount;
+  final int helpfulVoteCount;
+  final ContributorExperience experience;
 }
 
 class AdminContribution {
@@ -431,7 +435,7 @@ class CommunityContribution {
     required this.stationName,
     required this.brand,
     required this.createdAt,
-    required this.trustBadge,
+    required this.experience,
     required this.lat,
     required this.lng,
     this.gasoline,
@@ -468,7 +472,7 @@ class CommunityContribution {
   final int feedbackCount;
   final String? myReaction;
   final List<CommunityFeedbackComment>? _publicComments;
-  final ContributorTrustBadge trustBadge;
+  final ContributorExperience experience;
 
   List<CommunityFeedbackComment> get publicComments =>
       _publicComments ?? const <CommunityFeedbackComment>[];
@@ -492,7 +496,7 @@ class CommunityContribution {
 
   factory CommunityContribution.fromFirestore({
     required QueryDocumentSnapshot<Map<String, dynamic>> doc,
-    required ContributorTrustBadge trustBadge,
+    required ContributorExperience experience,
     required int likeCount,
     required int disagreeCount,
     required int feedbackCount,
@@ -521,7 +525,7 @@ class CommunityContribution {
       feedbackCount: feedbackCount,
       myReaction: myReaction,
       publicComments: publicComments,
-      trustBadge: trustBadge,
+      experience: experience,
     );
   }
 
@@ -537,7 +541,7 @@ class CommunityContribution {
       stationName: stationName,
       brand: brand,
       createdAt: createdAt,
-      trustBadge: trustBadge,
+      experience: experience,
       lat: lat,
       lng: lng,
       gasoline: gasoline,
@@ -557,16 +561,28 @@ class CommunityContribution {
   }
 }
 
-class ContributorTrustBadge {
-  const ContributorTrustBadge({
-    required this.label,
-    required this.score,
-    required this.reason,
+class ContributorExperience {
+  const ContributorExperience({
+    required this.xp,
+    required this.level,
+    required this.title,
+    required this.currentLevelXp,
+    required this.nextLevelXp,
   });
 
-  final String label;
-  final int score;
-  final String reason;
+  final int xp;
+  final int level;
+  final String title;
+  final int currentLevelXp;
+  final int nextLevelXp;
+
+  double get progress {
+    final range = nextLevelXp - currentLevelXp;
+    if (range <= 0) return 1;
+    return ((xp - currentLevelXp) / range).clamp(0.0, 1.0);
+  }
+
+  int get xpToNextLevel => math.max(0, nextLevelXp - xp);
 }
 
 class DestinationPlace {

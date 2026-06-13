@@ -179,7 +179,7 @@ class _CommunityContributionsPageState
     final feedbackByReportId = await loadFeedbackAggregatesByReportId(
       currentUserId: currentUser?.uid,
     );
-    final trustCache = <String, ContributorTrustBadge>{};
+    final experienceCache = <String, ContributorExperience>{};
     final items = <CommunityContribution>[];
 
     for (final doc in docs) {
@@ -193,8 +193,9 @@ class _CommunityContributionsPageState
       final feedback =
           feedbackByReportId[doc.id] ?? const ReportFeedbackAggregate();
 
-      if (!trustCache.containsKey(contributorId)) {
-        trustCache[contributorId] = await buildContributorTrustBadgeForUser(
+      if (!experienceCache.containsKey(contributorId)) {
+        experienceCache[contributorId] =
+            await buildContributorExperienceForUser(
           contributorId: contributorId,
           feedbackByReportId: feedbackByReportId,
         );
@@ -203,7 +204,7 @@ class _CommunityContributionsPageState
       items.add(
         CommunityContribution.fromFirestore(
           doc: doc,
-          trustBadge: trustCache[contributorId]!,
+          experience: experienceCache[contributorId]!,
           likeCount: feedback.likeCount,
           disagreeCount: feedback.disagreeCount,
           feedbackCount: feedback.feedbackCount,
@@ -656,9 +657,7 @@ class _CommunityContributionsPageState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _psIsDark(context)
-          ? _psPageColor(context)
-          : const Color(0xFFF5F8FF),
+      backgroundColor: _psPageColor(context),
       body: SafeArea(child: _buildBody()),
     );
   }
@@ -1077,7 +1076,7 @@ class _CommunityContributionsPageState
                 ),
               ),
               const SizedBox(width: 8),
-              _communityTrustPill(item),
+              _communityLevelPill(item),
             ],
           ),
           const SizedBox(height: 10),
@@ -1298,10 +1297,8 @@ class _CommunityContributionsPageState
     return source.characters.first.toUpperCase();
   }
 
-  Widget _communityTrustPill(CommunityContribution item) {
-    final trust = item.trustBadge.score.clamp(0, 100);
-    final good = trust >= 70;
-    final color = good ? const Color(0xFF16A34A) : const Color(0xFFE94B5A);
+  Widget _communityLevelPill(CommunityContribution item) {
+    const color = Color(0xFF2563EB);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
@@ -1311,10 +1308,10 @@ class _CommunityContributionsPageState
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.auto_awesome, color: color, size: 13),
+          Icon(Icons.workspace_premium_outlined, color: color, size: 13),
           const SizedBox(width: 4),
           Text(
-            'Trust score $trust%',
+            'Level ${item.experience.level}',
             style: TextStyle(
               color: color,
               fontSize: 10,
