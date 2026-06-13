@@ -330,6 +330,35 @@ class _CommunityContributionsPageState
     _reloadContributions();
   }
 
+  Future<void> _notifyReportOwner(
+    CommunityContribution item, {
+    required String actorUserId,
+    required String actorName,
+    required String title,
+    required String message,
+    required String type,
+  }) async {
+    final ownerId = item.userId?.trim() ?? '';
+    if (ownerId.isEmpty || ownerId == actorUserId) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'userId': ownerId,
+        'title': title,
+        'message': message,
+        'type': type,
+        'reportId': item.id,
+        'stationName': _communityStationTitle(item),
+        'actorUserId': actorUserId,
+        'actorName': actorName,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      debugPrint('Community notification failed: $error');
+    }
+  }
+
   Future<void> saveReaction(CommunityContribution item, String reaction) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -356,6 +385,7 @@ class _CommunityContributionsPageState
           .collection('contributionFeedback')
           .doc(feedbackId);
       final existing = await docRef.get();
+      final existingReaction = existing.data()?['reaction']?.toString();
       final payload = <String, Object?>{
         'reportId': item.id,
         'type': 'reaction',
@@ -371,6 +401,18 @@ class _CommunityContributionsPageState
       }
 
       await docRef.set(payload, SetOptions(merge: true));
+      if (existingReaction != reaction) {
+        final isLike = reaction == 'like';
+        await _notifyReportOwner(
+          item,
+          actorUserId: user.uid,
+          actorName: authorName,
+          title: isLike ? 'Someone liked your report' : 'Someone disagreed',
+          message:
+              '$authorName ${isLike ? 'liked' : 'disagreed with'} your report for ${_communityStationTitle(item)}.',
+          type: isLike ? 'community_like' : 'community_disagree',
+        );
+      }
 
       if (!mounted) return;
       await _reloadContributions(showLoading: false);
@@ -482,6 +524,15 @@ class _CommunityContributionsPageState
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await _notifyReportOwner(
+        item,
+        actorUserId: user.uid,
+        actorName: authorName,
+        title: 'New comment on your report',
+        message:
+            '$authorName commented on your report for ${_communityStationTitle(item)}.',
+        type: 'community_comment',
+      );
 
       if (!mounted) return;
       await _reloadContributions(showLoading: false);
@@ -580,6 +631,15 @@ class _CommunityContributionsPageState
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await _notifyReportOwner(
+        item,
+        actorUserId: user.uid,
+        actorName: authorName,
+        title: 'New reply on your report',
+        message:
+            '$authorName replied on your report for ${_communityStationTitle(item)}.',
+        type: 'community_reply',
+      );
 
       if (!mounted) return;
       await _reloadContributions(showLoading: false);
