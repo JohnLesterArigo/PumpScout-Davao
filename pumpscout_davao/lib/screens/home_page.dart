@@ -32,6 +32,21 @@ Color _psMutedTextColor(BuildContext context) =>
 Color _psBorderColor(BuildContext context) =>
     _psIsDark(context) ? _psDarkBorder : _psLightBorder;
 
+Color _psActionColor(BuildContext context) =>
+    _psIsDark(context) ? const Color(0xFFD7DBE2) : const Color(0xFF2563EB);
+
+Color _psFilledActionColor(BuildContext context) =>
+    _psIsDark(context) ? _psSoftPanel : const Color(0xFF2563EB);
+
+Color _psDecorativeColor(BuildContext context, Color lightColor) =>
+    _psIsDark(context) ? const Color(0xFFB8BEC8) : lightColor;
+
+Color _psLevelProgressColor(double progress) {
+  if (progress < 0.25) return const Color(0xFFE5B832);
+  if (progress < 0.75) return const Color(0xFF9BC53D);
+  return const Color(0xFF22A65A);
+}
+
 class HomePage extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback toggleTheme;
@@ -56,6 +71,7 @@ class _HomePageState extends State<HomePage> {
   Timer? fuelInsightsTimer;
   Future<List<_HomeFuelInsight>>? fuelInsightsFuture;
   Future<List<StationMarkerDetails>>? cheapestStationsFuture;
+  bool isExpandedMapOpen = false;
 
   @override
   void initState() {
@@ -152,9 +168,9 @@ class _HomePageState extends State<HomePage> {
                 body: SafeArea(
                   child: SingleChildScrollView(
                     padding: EdgeInsets.fromLTRB(
-                      20,
-                      18,
-                      20,
+                      16,
+                      12,
+                      16,
                       24 + bottomPadding,
                     ),
                     child: Column(
@@ -222,52 +238,74 @@ class _HomePageState extends State<HomePage> {
                                 },
                               ),
                             ],
-                            const SizedBox(height: 12),
-                            _profileInfoRow(
-                              context,
-                              'Model',
-                              _profileValue(
-                                vehicle['name'],
-                                fallback: 'Not set',
-                              ),
-                            ),
-                            _profileInfoRow(
-                              context,
-                              'Type',
-                              _profileValue(
-                                vehicle['wheels'],
-                                fallback: 'Not set',
-                              ),
-                            ),
-                            _profileInfoRow(
-                              context,
-                              'Use',
-                              _profileValue(
-                                vehicle['use'],
-                                fallback: 'Not set',
-                              ),
-                            ),
-                            _profileInfoRow(
-                              context,
-                              'Fuel',
-                              _profileValue(
-                                vehicle['preferredFuelType'],
-                                fallback: 'Not set',
-                              ),
-                            ),
-                            _profileInfoRow(
-                              context,
-                              'Consumption',
-                              kmPerLiter == null
-                                  ? 'Not set'
-                                  : '${kmPerLiter.toStringAsFixed(1)} km/L',
-                            ),
-                            _profileInfoRow(
-                              context,
-                              'Idle rate',
-                              idleRate == null
-                                  ? 'Not set'
-                                  : '${idleRate.toStringAsFixed(2)} L/hr',
+                            const SizedBox(height: 14),
+                            GridView.count(
+                              crossAxisCount: 2,
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              childAspectRatio: 2.55,
+                              mainAxisSpacing: 10,
+                              crossAxisSpacing: 10,
+                              children: [
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.directions_car_outlined,
+                                  label: 'Model',
+                                  value: _profileValue(
+                                    vehicle['name'],
+                                    fallback: 'Not set',
+                                  ),
+                                  color: const Color(0xFF2563EB),
+                                ),
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.tire_repair_outlined,
+                                  label: 'Type',
+                                  value: _profileValue(
+                                    vehicle['wheels'],
+                                    fallback: 'Not set',
+                                  ),
+                                  color: const Color(0xFF7C3AED),
+                                ),
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.person_outline,
+                                  label: 'Use',
+                                  value: _profileValue(
+                                    vehicle['use'],
+                                    fallback: 'Not set',
+                                  ),
+                                  color: const Color(0xFF059669),
+                                ),
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.local_gas_station_outlined,
+                                  label: 'Fuel',
+                                  value: _profileValue(
+                                    vehicle['preferredFuelType'],
+                                    fallback: 'Not set',
+                                  ),
+                                  color: const Color(0xFFF59E0B),
+                                ),
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.trending_up,
+                                  label: 'Consumption',
+                                  value: kmPerLiter == null
+                                      ? 'Not set'
+                                      : '${kmPerLiter.toStringAsFixed(1)} km/L',
+                                  color: const Color(0xFFEA580C),
+                                ),
+                                _profileVehicleDetail(
+                                  context,
+                                  icon: Icons.speed_outlined,
+                                  label: 'Idle rate',
+                                  value: idleRate == null
+                                      ? 'Not set'
+                                      : '${idleRate.toStringAsFixed(2)} L/hr',
+                                  color: const Color(0xFF8B5CF6),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 8),
                             Row(
@@ -288,10 +326,12 @@ class _HomePageState extends State<HomePage> {
                                     icon: const Icon(Icons.tune),
                                     label: const Text('Edit car'),
                                     style: OutlinedButton.styleFrom(
-                                      foregroundColor: _psPrimaryTextColor(
-                                        context,
+                                      foregroundColor: _psActionColor(context),
+                                      side: BorderSide(
+                                        color: _psIsDark(context)
+                                            ? _psBorderColor(context)
+                                            : _psActionColor(context),
                                       ),
-                                      side: const BorderSide(color: _psRed),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(
                                           999,
@@ -317,8 +357,15 @@ class _HomePageState extends State<HomePage> {
                                     icon: const Icon(Icons.add),
                                     label: const Text('Add car'),
                                     style: FilledButton.styleFrom(
-                                      backgroundColor: _psRed,
+                                      backgroundColor: _psFilledActionColor(
+                                        context,
+                                      ),
                                       foregroundColor: Colors.white,
+                                      side: _psIsDark(context)
+                                          ? BorderSide(
+                                              color: _psBorderColor(context),
+                                            )
+                                          : null,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(
                                           999,
@@ -356,7 +403,7 @@ class _HomePageState extends State<HomePage> {
                                   Theme.of(context).brightness ==
                                   Brightness.dark,
                               onChanged: (_) => toggleTheme(),
-                              activeThumbColor: _psRed,
+                              activeThumbColor: _psActionColor(context),
                             ),
                           ],
                         ),
@@ -375,8 +422,15 @@ class _HomePageState extends State<HomePage> {
                                   icon: const Icon(Icons.verified_user),
                                   label: const Text('Open admin dashboard'),
                                   style: FilledButton.styleFrom(
-                                    backgroundColor: _psRed,
+                                    backgroundColor: _psFilledActionColor(
+                                      context,
+                                    ),
                                     foregroundColor: Colors.white,
+                                    side: _psIsDark(context)
+                                        ? BorderSide(
+                                            color: _psBorderColor(context),
+                                          )
+                                        : null,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(999),
                                     ),
@@ -423,8 +477,12 @@ class _HomePageState extends State<HomePage> {
                                 icon: const Icon(Icons.history),
                                 label: const Text('My contributions'),
                                 style: OutlinedButton.styleFrom(
-                                  foregroundColor: _psPrimaryTextColor(context),
-                                  side: const BorderSide(color: _psRed),
+                                  foregroundColor: _psActionColor(context),
+                                  side: BorderSide(
+                                    color: _psIsDark(context)
+                                        ? _psBorderColor(context)
+                                        : _psActionColor(context),
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(999),
                                   ),
@@ -444,8 +502,11 @@ class _HomePageState extends State<HomePage> {
                             icon: const Icon(Icons.logout),
                             label: const Text('Sign out'),
                             style: FilledButton.styleFrom(
-                              backgroundColor: _psRed,
+                              backgroundColor: _psFilledActionColor(context),
                               foregroundColor: Colors.white,
+                              side: _psIsDark(context)
+                                  ? BorderSide(color: _psBorderColor(context))
+                                  : null,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(999),
                               ),
@@ -688,12 +749,19 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _profileHeader(BuildContext context, UserProfileSummary profile) {
+    final accent = _psActionColor(context);
+    final experience = profile.experience;
+    final progressColor = _psLevelProgressColor(experience.progress);
+    final lastReport = profile.lastReportAt == null
+        ? 'None'
+        : _formatDateTime(profile.lastReportAt!);
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: _psPanelColor(context),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(color: _psBorderColor(context)),
         boxShadow: [
           BoxShadow(
@@ -705,48 +773,180 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _psRed.withValues(alpha: 0.12),
-              border: Border.all(color: _psRed.withValues(alpha: 0.55)),
-            ),
-            child: Icon(
-              Icons.person,
-              color: _psIsDark(context) ? Colors.white : _psRed,
-              size: 34,
+          Row(
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 82,
+                    height: 82,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: accent.withValues(alpha: 0.10),
+                      border: Border.all(
+                        color: accent.withValues(alpha: 0.28),
+                        width: 2,
+                      ),
+                    ),
+                    child: Icon(Icons.person_rounded, color: accent, size: 46),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: 1,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: _psPanelColor(context),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: _psBorderColor(context)),
+                      ),
+                      child: Icon(
+                        Icons.camera_alt_outlined,
+                        color: accent,
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      profile.displayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: _psPrimaryTextColor(context),
+                            letterSpacing: -0.4,
+                          ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            profile.isAdmin
+                                ? 'PumpScout Admin'
+                                : 'PumpScout Contributor',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: _psMutedTextColor(context),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Icon(Icons.verified_rounded, color: accent, size: 17),
+                      ],
+                    ),
+                    const SizedBox(height: 9),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'Level ${experience.level}  •  ${experience.title}',
+                        style: TextStyle(
+                          color: accent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Text(
+                '${experience.xp} XP',
+                style: TextStyle(
+                  color: _psPrimaryTextColor(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${experience.xpToNextLevel} XP to next level',
+                style: TextStyle(
+                  color: _psMutedTextColor(context),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              minHeight: 8,
+              value: experience.progress,
+              backgroundColor: _psIsDark(context)
+                  ? _psDarkBorder
+                  : progressColor.withValues(alpha: 0.14),
+              valueColor: AlwaysStoppedAnimation<Color>(progressColor),
             ),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: _psSoftPanelColor(context),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _psBorderColor(context)),
+            ),
+            child: Row(
               children: [
-                Text(
-                  profile.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: _psPrimaryTextColor(context),
-                    letterSpacing: 0,
-                  ),
+                _profileHeroStat(
+                  context,
+                  icon: Icons.local_gas_station_outlined,
+                  value: '${profile.reportCount}',
+                  label: 'Price reports',
+                  color: accent,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  profile.isAdmin
-                      ? 'PumpScout admin account'
-                      : 'PumpScout account',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ).copyWith(color: _psMutedTextColor(context)),
+                _profileStatDivider(context),
+                _profileHeroStat(
+                  context,
+                  icon: Icons.history_rounded,
+                  value: lastReport,
+                  label: 'Last report',
+                  color: const Color(0xFF7C3AED),
                 ),
-                const SizedBox(height: 10),
-                buildContributorLevelChip(context, profile.experience),
+                _profileStatDivider(context),
+                _profileHeroStat(
+                  context,
+                  icon: Icons.emoji_events_outlined,
+                  value: experience.title,
+                  label: 'Contributor',
+                  color: const Color(0xFFF59E0B),
+                ),
+                _profileStatDivider(context),
+                _profileHeroStat(
+                  context,
+                  icon: Icons.verified_user_outlined,
+                  value: 'Verified',
+                  label: 'Account',
+                  color: const Color(0xFF059669),
+                ),
               ],
             ),
           ),
@@ -766,7 +966,11 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: _psSoftPanelColor(context),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _psRed.withValues(alpha: 0.28)),
+        border: Border.all(
+          color: _psIsDark(context)
+              ? _psBorderColor(context)
+              : const Color(0xFF2563EB).withValues(alpha: 0.28),
+        ),
       ),
       child: Row(
         children: [
@@ -774,10 +978,16 @@ class _HomePageState extends State<HomePage> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: _psRed.withValues(alpha: 0.14),
+              color: _psDecorativeColor(
+                context,
+                const Color(0xFF2563EB),
+              ).withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.directions_car, color: _psRed),
+            child: Icon(
+              Icons.directions_car,
+              color: _psDecorativeColor(context, const Color(0xFF2563EB)),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -851,10 +1061,10 @@ class _HomePageState extends State<HomePage> {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: _psRed.withValues(alpha: 0.14),
+                  color: _psActionColor(context).withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: _psRed, size: 20),
+                child: Icon(icon, color: _psActionColor(context), size: 20),
               ),
               const SizedBox(width: 8),
               Text(
@@ -871,6 +1081,112 @@ class _HomePageState extends State<HomePage> {
           ...children,
         ],
       ),
+    );
+  }
+
+  Widget _profileHeroStat(
+    BuildContext context, {
+    required IconData icon,
+    required String value,
+    required String label,
+    required Color color,
+  }) {
+    final displayColor = _psDecorativeColor(context, color);
+    return Expanded(
+      child: Column(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: displayColor.withValues(alpha: 0.11),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: displayColor, size: 19),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _psPrimaryTextColor(context),
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _psMutedTextColor(context),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileStatDivider(BuildContext context) {
+    return Container(width: 1, height: 54, color: _psBorderColor(context));
+  }
+
+  Widget _profileVehicleDetail(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    final displayColor = _psDecorativeColor(context, color);
+    return Row(
+      children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: displayColor.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Icon(icon, color: displayColor, size: 20),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _psMutedTextColor(context),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _psPrimaryTextColor(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1255,6 +1571,11 @@ class _HomePageState extends State<HomePage> {
   Future<void> showExpandedMap({
     Future<void> Function(_MapContainerState mapState)? afterOpen,
   }) async {
+    if (isExpandedMapOpen) return;
+    setState(() => isExpandedMapOpen = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
     final expandedMapKey = GlobalKey<_MapContainerState>();
     final routeToRestore = activeHomeRoutePlace;
     final actionToRun =
@@ -1266,33 +1587,37 @@ class _HomePageState extends State<HomePage> {
                 startNavigation: true,
               ));
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (context) {
-          if (actionToRun != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _runExpandedMapAction(expandedMapKey, actionToRun);
-            });
-          }
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (context) {
+            if (actionToRun != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _runExpandedMapAction(expandedMapKey, actionToRun);
+              });
+            }
 
-          return Scaffold(
-            backgroundColor: _psPageColor(context),
-            appBar: AppBar(
-              title: const Text('PumpScout Map'),
+            return Scaffold(
               backgroundColor: _psPageColor(context),
-              foregroundColor: _psPrimaryTextColor(context),
-              elevation: 0,
-            ),
-            body: MapContainer(
-              key: expandedMapKey,
-              isDarkMode: widget.isDarkMode,
-              onRouteCancelled: clearHomeRoute,
-            ),
-          );
-        },
-      ),
-    );
+              appBar: AppBar(
+                title: const Text('PumpScout Map'),
+                backgroundColor: _psPageColor(context),
+                foregroundColor: _psPrimaryTextColor(context),
+                elevation: 0,
+              ),
+              body: MapContainer(
+                key: expandedMapKey,
+                isDarkMode: widget.isDarkMode,
+                onRouteCancelled: clearHomeRoute,
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => isExpandedMapOpen = false);
+    }
   }
 
   void clearHomeRoute() {
@@ -2032,6 +2357,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _liveMiniMapPreview(BuildContext context) {
+    if (isExpandedMapOpen) {
+      return ColoredBox(color: _psSoftPanelColor(context));
+    }
+
     return Stack(
       children: [
         Positioned.fill(
@@ -2201,8 +2530,11 @@ class _HomePageState extends State<HomePage> {
                     ),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
-                      backgroundColor: const Color(0xFF2563EB),
+                      backgroundColor: _psFilledActionColor(context),
                       foregroundColor: Colors.white,
+                      side: _psIsDark(context)
+                          ? BorderSide(color: _psBorderColor(context))
+                          : null,
                     ),
                   ),
                 ),
@@ -2274,6 +2606,7 @@ class _HomePageState extends State<HomePage> {
     }
     if (normalized.contains('unioil')) return 'assets/images/uniOil_logo.png';
     if (normalized.contains('mygas')) return 'assets/images/myGas_logo.png';
+    if (normalized.contains('phoenix')) return 'assets/images/phoenix_logo.jpg';
     return null;
   }
 

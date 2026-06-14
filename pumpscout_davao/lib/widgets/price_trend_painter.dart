@@ -19,12 +19,12 @@ class PriceTrendPainter extends CustomPainter {
       ..color = Colors.grey.withValues(alpha: 0.25)
       ..strokeWidth = 1;
     final linePaint = Paint()
-      ..color = const Color(0xFF00C853)
+      ..color = const Color(0xFF2563EB)
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
     final dotPaint = Paint()
-      ..color = const Color(0xFF00C853)
+      ..color = const Color(0xFF2563EB)
       ..style = PaintingStyle.fill;
     final forecastPaint = Paint()
       ..color = const Color(0xFFFFA000)

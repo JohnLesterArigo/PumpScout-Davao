@@ -100,6 +100,7 @@ flutter:
     - assets/images/caltext_logo.jpg
     - assets/images/uniOil_logo.png
     - assets/images/myGas_logo.png
+    - assets/images/phoenix_logo.jpg
     - assets/images/car.png
     - assets/data/regional_price_stats.json
     - assets/data/price_forecast_model.json

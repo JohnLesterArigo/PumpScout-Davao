@@ -52,4 +52,5 @@ android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
 macos/Runner/GoogleService-Info.plist
 .env
+/dart_defines.local.json
 functions/node_modules/

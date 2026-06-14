@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PumpScout Davao",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/pumpscout_davao",
+      "program": "${workspaceFolder}/pumpscout_davao/lib/main.dart",
+      "toolArgs": [
+        "--dart-define-from-file=${workspaceFolder}/pumpscout_davao/dart_defines.local.json"
+      ]
+    }
+  ]
+}

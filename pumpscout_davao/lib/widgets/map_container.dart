@@ -26,6 +26,8 @@ class _MapContainerState extends State<MapContainer> {
   static const int maxVisibleStationMarkers = 160;
   static const int maxVisibleClusterMarkers = 80;
   static const int maxViewportStationRadiusMeters = 45000;
+  static const int maxCachedStationCount = 600;
+  static const String stationCacheKey = 'map_station_cache_v1';
 
   MapboxMap? mapboxMap;
   CircleAnnotationManager? stationAnnotationManager;
@@ -46,13 +48,17 @@ class _MapContainerState extends State<MapContainer> {
   bool isRouteActive = false;
   bool isNavigationFollowing = false;
   bool hasCenteredOnUserLocation = false;
+  bool isBasemapReady = false;
+  bool hasStartedMapData = false;
   int stationLoadId = 0;
   double currentMapZoom = 16;
   Timer? markerClusterDebounce;
   Timer? stationViewportDebounce;
+  late final Future<void> stationCacheLoadFuture;
   double? lastRequestedMapLat;
   double? lastRequestedMapLng;
   double? lastRequestedMapZoom;
+  DateTime? lastFirestoreStationLoadAt;
 
   String get mapStyleUri =>
       widget.isDarkMode ? MapboxStyles.DARK : MapboxStyles.MAPBOX_STREETS;
@@ -60,11 +66,16 @@ class _MapContainerState extends State<MapContainer> {
   @override
   void initState() {
     super.initState();
+    stationCacheLoadFuture = _loadStationCache();
     loadSavedStationKeys();
   }
 
   @override
   void dispose() {
+    stationLoadId++;
+    mapboxMap = null;
+    stationAnnotationManager = null;
+    stationLabelManager = null;
     locationSubscription?.cancel();
     markerClusterDebounce?.cancel();
     stationViewportDebounce?.cancel();
@@ -124,6 +135,41 @@ class _MapContainerState extends State<MapContainer> {
       'savedStations': _savedStationMaps(),
       'savedStationKeysUpdatedAt': Timestamp.now(),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> _loadStationCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = prefs.getString(stationCacheKey);
+      if (encoded == null || encoded.isEmpty) return;
+      final decoded = jsonDecode(encoded);
+      if (decoded is! List) return;
+
+      final stations = <dynamic>[
+        for (final item in decoded)
+          if (item is Map) Map<String, dynamic>.from(item),
+      ];
+      if (stations.isNotEmpty) cachedStations = stations;
+    } catch (error) {
+      debugPrint('Station cache load failed: $error');
+    }
+  }
+
+  Future<void> _saveStationCache() async {
+    final stations = cachedStations;
+    if (stations == null || stations.isEmpty) return;
+
+    try {
+      final serializable = stations
+          .whereType<Map>()
+          .take(maxCachedStationCount)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(stationCacheKey, jsonEncode(serializable));
+    } catch (error) {
+      debugPrint('Station cache save failed: $error');
+    }
   }
 
   Future<void> toggleSavedStation(StationMarkerDetails details) async {
@@ -326,6 +372,7 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   void handleMapCameraChanged(CameraState cameraState) {
+    if (!isBasemapReady) return;
     handleMapZoomChanged(cameraState.zoom);
     if (isRouteActive) return;
 
@@ -352,7 +399,7 @@ class _MapContainerState extends State<MapContainer> {
     }
 
     stationViewportDebounce?.cancel();
-    stationViewportDebounce = Timer(const Duration(milliseconds: 700), () {
+    stationViewportDebounce = Timer(const Duration(milliseconds: 300), () {
       if (!mounted || mapboxMap == null || isRouteActive) return;
       lastRequestedMapLat = lat;
       lastRequestedMapLng = lng;
@@ -408,8 +455,15 @@ class _MapContainerState extends State<MapContainer> {
     }
 
     if (useCache && cachedStations != null && cachedStations!.isNotEmpty) {
-      await drawStationMarkers(cachedStations!, loadId);
-      return;
+      final cachedNearby = _visibleStationsNear(
+        cachedStations!,
+        location.latitude,
+        location.longitude,
+        _visibleStationRadiusMeters(location.latitude),
+      );
+      if (cachedNearby.isNotEmpty) {
+        await drawStationMarkers(cachedNearby, loadId);
+      }
     }
 
     lastRequestedMapLat = location.latitude;
@@ -432,22 +486,35 @@ class _MapContainerState extends State<MapContainer> {
     if (mapboxMap == null) return;
 
     final queryRadius = radiusMeters ?? stationDemoRadiusMeters;
-    firestoreStations = await fetchStationPrices();
+    final cachedNearby = _visibleStationsNear(
+      cachedStations ?? const <dynamic>[],
+      lat,
+      lng,
+      queryRadius,
+    );
+    if (cachedNearby.isNotEmpty) {
+      await drawStationMarkers(cachedNearby, loadId);
+    }
+
+    final pricesFuture = _loadStationPrices();
+    final liveStationsFuture = fetchGasStations(
+      lat,
+      lng,
+      radiusMeters: queryRadius,
+    );
+
+    firestoreStations = await pricesFuture;
     final pricedStations = _firestoreStationMapsNear(
       lat,
       lng,
       radiusMeters: queryRadius,
     );
-    if (pricedStations.isNotEmpty && cachedStations == null) {
-      cachedStations = pricedStations;
+    if (!mounted || loadId != stationLoadId || mapboxMap == null) return;
+    if (pricedStations.isNotEmpty && cachedNearby.isEmpty) {
       await drawStationMarkers(pricedStations, loadId);
     }
 
-    final liveStations = await fetchGasStations(
-      lat,
-      lng,
-      radiusMeters: queryRadius,
-    );
+    final liveStations = await liveStationsFuture;
     final stations = _visibleStationsNear(
       _mergeStationSources(liveStations, pricedStations),
       lat,
@@ -470,8 +537,55 @@ class _MapContainerState extends State<MapContainer> {
       return;
     }
 
-    cachedStations = stations;
+    cachedStations = _mergeStationCache(cachedStations, stations);
+    unawaited(_saveStationCache());
     await drawStationMarkers(stations, loadId);
+  }
+
+  Future<List<StationPrice>> _loadStationPrices() async {
+    final lastLoadedAt = lastFirestoreStationLoadAt;
+    if (firestoreStations.isNotEmpty &&
+        lastLoadedAt != null &&
+        DateTime.now().difference(lastLoadedAt) < const Duration(minutes: 5)) {
+      return firestoreStations;
+    }
+
+    final stations = await fetchStationPrices();
+    lastFirestoreStationLoadAt = DateTime.now();
+    return stations;
+  }
+
+  List<dynamic> _mergeStationCache(
+    List<dynamic>? existing,
+    List<dynamic> incoming,
+  ) {
+    final merged = <dynamic>[...?existing];
+    for (final station in incoming) {
+      final lat = _stationLatitude(station);
+      final lng = _stationLongitude(station);
+      if (lat == null || lng == null) continue;
+
+      final duplicateIndex = merged.indexWhere((candidate) {
+        final candidateLat = _stationLatitude(candidate);
+        final candidateLng = _stationLongitude(candidate);
+        if (candidateLat == null || candidateLng == null) return false;
+        return geo.Geolocator.distanceBetween(
+              lat,
+              lng,
+              candidateLat,
+              candidateLng,
+            ) <=
+            25;
+      });
+      if (duplicateIndex >= 0) {
+        merged[duplicateIndex] = station;
+      } else {
+        merged.add(station);
+      }
+    }
+
+    if (merged.length <= maxCachedStationCount) return merged;
+    return merged.sublist(merged.length - maxCachedStationCount);
   }
 
   int _visibleStationRadiusMeters(double centerLat) {
@@ -571,14 +685,28 @@ class _MapContainerState extends State<MapContainer> {
   }
 
   Future<void> drawStationMarkers(List<dynamic> stations, int loadId) async {
-    stationAnnotationManager ??= await mapboxMap!.annotations
-        .createCircleAnnotationManager();
-    stationLabelManager ??= await mapboxMap!.annotations
-        .createPointAnnotationManager();
-    await stationAnnotationManager!.deleteAll();
-    await stationLabelManager!.deleteAll();
-    await stationLabelManager!.setTextAllowOverlap(true);
-    await stationLabelManager!.setTextIgnorePlacement(true);
+    final map = mapboxMap;
+    if (!mounted || !isBasemapReady || map == null || loadId != stationLoadId) {
+      return;
+    }
+
+    try {
+      stationAnnotationManager ??= await map.annotations
+          .createCircleAnnotationManager();
+      if (!mounted || mapboxMap != map || loadId != stationLoadId) return;
+      stationLabelManager ??= await map.annotations
+          .createPointAnnotationManager();
+      if (!mounted || mapboxMap != map || loadId != stationLoadId) return;
+      await stationAnnotationManager!.deleteAll();
+      await stationLabelManager!.deleteAll();
+      await stationLabelManager!.setTextAllowOverlap(true);
+      await stationLabelManager!.setTextIgnorePlacement(true);
+    } catch (error) {
+      if (mounted && mapboxMap == map && loadId == stationLoadId) {
+        debugPrint('Station annotation reset failed: $error');
+      }
+      return;
+    }
     stationDetailsByAnnotationId.clear();
     clusterByAnnotationId.clear();
     nearbyStationDetails = [];
@@ -654,61 +782,73 @@ class _MapContainerState extends State<MapContainer> {
       return;
     }
 
-    for (var station in markerSource) {
-      final didDraw = await _drawSingleStationMarker(station, markerCount);
-      if (didDraw) markerCount++;
-    }
+    markerCount = await _drawSingleStationMarkers(markerSource);
 
     stationAnnotationManager!.tapEvents(onTap: showStationPriceSheet);
     stationLabelManager!.tapEvents(onTap: showStationLabelTap);
     debugPrint('Loaded $markerCount nearby fuel station markers');
   }
 
-  Future<bool> _drawSingleStationMarker(
-    dynamic station,
-    int markerCount,
-  ) async {
-    final lat = _stationLatitude(station);
-    final lng = _stationLongitude(station);
-    if (lat == null || lng == null) return false;
+  Future<void> _startMapDataAfterBasemap() async {
+    if (hasStartedMapData || !mounted || mapboxMap == null) return;
+    hasStartedMapData = true;
+    isBasemapReady = true;
 
-    final stationMap = station is Map<String, dynamic>
-        ? station
-        : <String, dynamic>{};
-    final rawTags = stationMap['tags'];
-    final tags = rawTags is Map
-        ? Map<String, dynamic>.from(rawTags)
-        : <String, dynamic>{};
-    final name = _stringField(
-      tags,
-      'name',
-      fallback: _stringField(tags, 'operator', fallback: 'Fuel station'),
-    );
-    final brand = _stringField(
-      tags,
-      'brand',
-      fallback: _stringField(tags, 'operator', fallback: name),
-    );
-    final price = _nearestPriceFor(lat, lng, name);
-    final distanceMeters = currentLocation == null
-        ? null
-        : geo.Geolocator.distanceBetween(
-            currentLocation!.latitude,
-            currentLocation!.longitude,
-            lat,
-            lng,
-          );
-    final details = StationMarkerDetails(
-      name: price?.name ?? name,
-      brand: price?.brand.isNotEmpty == true ? price!.brand : brand,
-      lat: lat,
-      lng: lng,
-      distanceMeters: distanceMeters,
-      price: price,
-    );
+    await stationCacheLoadFuture;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted || mapboxMap == null) return;
 
-    try {
-      final annotation = await stationAnnotationManager!.create(
+    await startLocationUpdates();
+    moveToCurrentLocation();
+  }
+
+  Future<int> _drawSingleStationMarkers(List<dynamic> stations) async {
+    final options = <CircleAnnotationOptions>[];
+    final details = <StationMarkerDetails>[];
+
+    for (final station in stations) {
+      final lat = _stationLatitude(station);
+      final lng = _stationLongitude(station);
+      if (lat == null || lng == null) continue;
+
+      final stationMap = station is Map<String, dynamic>
+          ? station
+          : <String, dynamic>{};
+      final rawTags = stationMap['tags'];
+      final tags = rawTags is Map
+          ? Map<String, dynamic>.from(rawTags)
+          : <String, dynamic>{};
+      final name = _stringField(
+        tags,
+        'name',
+        fallback: _stringField(tags, 'operator', fallback: 'Fuel station'),
+      );
+      final brand = _stringField(
+        tags,
+        'brand',
+        fallback: _stringField(tags, 'operator', fallback: name),
+      );
+      final price = _nearestPriceFor(lat, lng, name);
+      final distanceMeters = currentLocation == null
+          ? null
+          : geo.Geolocator.distanceBetween(
+              currentLocation!.latitude,
+              currentLocation!.longitude,
+              lat,
+              lng,
+            );
+
+      details.add(
+        StationMarkerDetails(
+          name: price?.name ?? name,
+          brand: price?.brand.isNotEmpty == true ? price!.brand : brand,
+          lat: lat,
+          lng: lng,
+          distanceMeters: distanceMeters,
+          price: price,
+        ),
+      );
+      options.add(
         CircleAnnotationOptions(
           geometry: Point(coordinates: Position(lng, lat)),
           circleColor: price == null
@@ -720,12 +860,23 @@ class _MapContainerState extends State<MapContainer> {
           circleOpacity: 0.94,
         ),
       );
-      stationDetailsByAnnotationId[annotation.id] = details;
-      nearbyStationDetails.add(details);
-      return true;
+    }
+
+    if (options.isEmpty) return 0;
+    try {
+      final annotations = await stationAnnotationManager!.createMulti(options);
+      var count = 0;
+      for (var index = 0; index < annotations.length; index++) {
+        final annotation = annotations[index];
+        if (annotation == null || index >= details.length) continue;
+        stationDetailsByAnnotationId[annotation.id] = details[index];
+        nearbyStationDetails.add(details[index]);
+        count++;
+      }
+      return count;
     } catch (error) {
-      debugPrint('Station marker draw failed at $markerCount: $error');
-      return false;
+      debugPrint('Station marker batch draw failed: $error');
+      return 0;
     }
   }
 
@@ -947,126 +1098,408 @@ class _MapContainerState extends State<MapContainer> {
 
     showModalBottomSheet(
       context: context,
-      showDragHandle: true,
       isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: _psPageColor(context),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.94,
+      ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (context) {
         final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
 
         return Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, 28 + bottomPadding),
+          padding: EdgeInsets.fromLTRB(14, 10, 14, 22 + bottomPadding),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: _psBorderColor(context),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _stationOverviewCard(details),
+                const SizedBox(height: 12),
+                _stationDetailSection(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Text(
-                            details.name,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
+                          Expanded(
+                            child: Text(
+                              'Current Prices',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w900),
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            details.brand,
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          if (details.distanceMeters != null) ...[
-                            const SizedBox(height: 4),
-                            Text(_formatDistance(details.distanceMeters!)),
-                          ],
+                          if (price?.updatedAt != null)
+                            _priceFreshnessBadge(price!.updatedAt!),
                         ],
                       ),
-                    ),
-                    StatefulBuilder(
-                      builder: (context, setActionState) {
-                        final isFavorite = favoriteStationKeys.contains(
-                          _stationFavoriteKey(details),
-                        );
-
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: isFavorite
-                                  ? 'Remove favorite'
-                                  : 'Favorite station',
-                              onPressed: () async {
-                                await toggleSavedStation(details);
-                                if (!context.mounted) return;
-                                setActionState(() {});
-                              },
-                              icon: Icon(
-                                isFavorite ? Icons.star : Icons.star_border,
-                                color: Colors.amber.shade700,
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Show route',
-                              onPressed: () => showInAppRoute(details),
-                              icon: const Icon(Icons.navigation),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => showInAppRoute(details),
-                    icon: const Icon(Icons.route),
-                    label: const Text('Show route in app'),
+                      const SizedBox(height: 12),
+                      _stationPriceCards(details),
+                      const SizedBox(height: 12),
+                      _priceDisclaimer(),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                _stationCrowdPanel(details),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => showPriceReportSheet(details),
-                    icon: const Icon(Icons.edit_location_alt),
-                    label: const Text('Report updated prices'),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Current Prices',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                if (price?.updatedAt != null) ...[
-                  const SizedBox(height: 4),
-                  _priceFreshnessBadge(price!.updatedAt!),
-                ],
-                const SizedBox(height: 8),
-                ..._fuelDisplayItems(
-                  details,
-                ).map((item) => _priceRow(item.label, item.price)),
-                const SizedBox(height: 10),
-                _priceDisclaimer(),
-                const SizedBox(height: 16),
-                _priceForecastPanel(details),
+                _stationDetailSection(child: _priceForecastPanel(details)),
+                const SizedBox(height: 12),
+                _stationReportCallout(details),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _stationOverviewCard(StationMarkerDetails details) {
+    return _stationDetailSection(
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _stationBrandLogo(details),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _stationTitle(details),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _psPrimaryTextColor(context),
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    if (details.brand.trim().isNotEmpty &&
+                        details.brand.trim().toLowerCase() !=
+                            details.name.trim().toLowerCase()) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        details.brand,
+                        style: TextStyle(
+                          color: _psMutedTextColor(context),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                    if (details.distanceMeters != null) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.location_on_outlined,
+                            color: Color(0xFF2563EB),
+                            size: 18,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            _formatDistance(details.distanceMeters!),
+                            style: TextStyle(
+                              color: _psMutedTextColor(context),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              StatefulBuilder(
+                builder: (context, setActionState) {
+                  final isFavorite = favoriteStationKeys.contains(
+                    _stationFavoriteKey(details),
+                  );
+                  return IconButton(
+                    tooltip: isFavorite
+                        ? 'Remove favorite'
+                        : 'Favorite station',
+                    onPressed: () async {
+                      await toggleSavedStation(details);
+                      if (!context.mounted) return;
+                      setActionState(() {});
+                    },
+                    icon: Icon(
+                      isFavorite ? Icons.star : Icons.star_border,
+                      color: isFavorite
+                          ? Colors.amber.shade700
+                          : _psMutedTextColor(context),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => showInAppRoute(details),
+                  icon: const Icon(Icons.route),
+                  label: const Text('Show route'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    minimumSize: const ui.Size(0, 48),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => showPriceReportSheet(details),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Update prices'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF2563EB),
+                    side: const BorderSide(color: Color(0xFF2563EB)),
+                    minimumSize: const ui.Size(0, 48),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _stationCrowdPanel(details),
+        ],
+      ),
+    );
+  }
+
+  Widget _stationBrandLogo(StationMarkerDetails details) {
+    final source = '${details.brand} ${details.name}';
+    final asset = _stationLogoAssetForMap(source);
+    final initialSource = details.brand.trim().isNotEmpty
+        ? details.brand.trim()
+        : details.name.trim();
+
+    return Container(
+      width: 76,
+      height: 76,
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: _psBorderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.07),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: asset == null
+          ? Center(
+              child: Text(
+                initialSource.isEmpty
+                    ? 'P'
+                    : initialSource.characters.first.toUpperCase(),
+                style: const TextStyle(
+                  color: Color(0xFF2563EB),
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            )
+          : ClipOval(child: Image.asset(asset, fit: BoxFit.contain)),
+    );
+  }
+
+  String? _stationLogoAssetForMap(String value) {
+    final normalized = value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (normalized.contains('shell')) return 'assets/images/Shell_logo.png';
+    if (normalized.contains('petron')) return 'assets/images/petron_logo.jpg';
+    if (normalized.contains('seaoil')) {
+      return 'assets/images/seaOil_Logo.png';
+    }
+    if (normalized.contains('caltex') || normalized.contains('caltext')) {
+      return 'assets/images/caltext_logo.jpg';
+    }
+    if (normalized.contains('unioil')) return 'assets/images/uniOil_logo.png';
+    if (normalized.contains('mygas')) return 'assets/images/myGas_logo.png';
+    if (normalized.contains('phoenix')) return 'assets/images/phoenix_logo.jpg';
+    return null;
+  }
+
+  Widget _stationDetailSection({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _psBorderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: _psIsDark(context) ? 0.16 : 0.05,
+            ),
+            blurRadius: 18,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _stationPriceCards(StationMarkerDetails details) {
+    final items = _fuelDisplayItems(details);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = items.length <= 2
+            ? (constraints.maxWidth - 10) / math.max(items.length, 1)
+            : (constraints.maxWidth - 20) / 3;
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final item in items)
+              SizedBox(
+                width: width,
+                child: _stationPriceCard(item.label, item.price),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _stationPriceCard(String label, double? price) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _psSoftPanelColor(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB).withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.local_gas_station,
+              color: Color(0xFF2563EB),
+              size: 19,
+            ),
+          ),
+          const SizedBox(height: 9),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: _psMutedTextColor(context),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              price == null ? 'No data' : 'PHP ${price.toStringAsFixed(2)} / L',
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stationReportCallout(StationMarkerDetails details) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _psPanelColor(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(
+              Icons.price_check_outlined,
+              color: Color(0xFF2563EB),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Help keep prices accurate',
+                  style: TextStyle(
+                    color: _psPrimaryTextColor(context),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Your verified report helps nearby drivers.',
+                  style: TextStyle(
+                    color: _psMutedTextColor(context),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            onPressed: () => showPriceReportSheet(details),
+            icon: const Icon(Icons.edit_outlined, size: 17),
+            label: const Text('Report'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1844,26 +2277,6 @@ class _MapContainerState extends State<MapContainer> {
     );
   }
 
-  Widget _priceRow(String label, double? price) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 15))),
-          Text(
-            price == null ? 'No data' : 'PHP ${price.toStringAsFixed(2)} / L',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _priceForecastPanel(StationMarkerDetails details) {
     var selectedFuel = 'gasoline';
 
@@ -1900,6 +2313,16 @@ class _MapContainerState extends State<MapContainer> {
                 },
                 showSelectedIcon: false,
                 style: ButtonStyle(
+                  backgroundColor: WidgetStateProperty.resolveWith((states) {
+                    return states.contains(WidgetState.selected)
+                        ? const Color(0xFF2563EB)
+                        : Colors.transparent;
+                  }),
+                  foregroundColor: WidgetStateProperty.resolveWith((states) {
+                    return states.contains(WidgetState.selected)
+                        ? Colors.white
+                        : _psPrimaryTextColor(context);
+                  }),
                   visualDensity: VisualDensity.compact,
                   textStyle: WidgetStateProperty.all(
                     const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
@@ -2238,8 +2661,7 @@ class _MapContainerState extends State<MapContainer> {
     return null;
   }
 
-  void showPriceReportSheet(StationMarkerDetails details) {
-    final navigator = Navigator.of(context);
+  Future<void> showPriceReportSheet(StationMarkerDetails details) async {
     final messenger = ScaffoldMessenger.of(context);
     final restrictionMessage = _priceReportRestrictionMessage(details);
     if (restrictionMessage != null) {
@@ -2247,156 +2669,80 @@ class _MapContainerState extends State<MapContainer> {
       return;
     }
 
-    final reportItems = _fuelDisplayItems(details);
-    final priceControllers = {
-      for (final item in reportItems)
-        item.fuelType: TextEditingController(
-          text: item.price?.toStringAsFixed(2) ?? '',
-        ),
-    };
-    picker.XFile? selectedImage;
-    var isSubmitting = false;
+    final accepted = await _confirmPriceReportSafetyNotice(details);
+    if (!accepted || !mounted) return;
 
-    showModalBottomSheet(
+    final reportItems = _fuelDisplayItems(details);
+    final success = await showModalBottomSheet<bool>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
-
-            return Padding(
-              padding: EdgeInsets.fromLTRB(20, 8, 20, 24 + bottomPadding),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Report prices',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(details.name),
-                    const SizedBox(height: 16),
-                    for (final item in reportItems)
-                      _reportPriceField(
-                        controller: priceControllers[item.fuelType]!,
-                        label: item.label,
-                      ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: isSubmitting
-                          ? null
-                          : () async {
-                              final image = await picker.ImagePicker()
-                                  .pickImage(
-                                    source: picker.ImageSource.camera,
-                                    imageQuality: 75,
-                                  );
-                              if (image == null) return;
-                              setSheetState(() {
-                                selectedImage = image;
-                              });
-                            },
-                      icon: const Icon(Icons.photo_camera),
-                      label: Text(
-                        selectedImage == null
-                            ? 'Attach price board photo'
-                            : 'Photo attached',
-                      ),
-                    ),
-                    if (!isCloudinaryConfigured) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Photo upload needs Cloudinary setup. Price reports still save.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: isSubmitting
-                            ? null
-                            : () async {
-                                setSheetState(() {
-                                  isSubmitting = true;
-                                });
-                                final submittedPrices = {
-                                  for (final item in reportItems)
-                                    item.fuelType: _parsePrice(
-                                      priceControllers[item.fuelType]!.text,
-                                    ),
-                                };
-                                final success = await submitPriceReport(
-                                  details: details,
-                                  gasoline: _categoryPriceFromSubmitted(
-                                    submittedPrices,
-                                    'gasoline',
-                                  ),
-                                  diesel: _categoryPriceFromSubmitted(
-                                    submittedPrices,
-                                    'diesel',
-                                  ),
-                                  premium: _categoryPriceFromSubmitted(
-                                    submittedPrices,
-                                    'premium',
-                                  ),
-                                  fuelProducts: _productPricesFromSubmitted(
-                                    submittedPrices,
-                                  ),
-                                  image: selectedImage,
-                                );
-                                if (!mounted) return;
-                                if (navigator.canPop()) {
-                                  navigator.pop();
-                                }
-                                messenger.showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      success
-                                          ? 'Price report submitted for verification.'
-                                          : 'Price report failed.',
-                                    ),
-                                  ),
-                                );
-                              },
-                        child: Text(isSubmitting ? 'Submitting...' : 'Submit'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (context) => _PriceReportSheet(
+        stationName: details.name,
+        reportItems: reportItems,
+        cloudinaryConfigured: isCloudinaryConfigured,
+        onSubmit: (submittedPrices, image) {
+          return submitPriceReport(
+            details: details,
+            gasoline: _categoryPriceFromSubmitted(submittedPrices, 'gasoline'),
+            diesel: _categoryPriceFromSubmitted(submittedPrices, 'diesel'),
+            premium: _categoryPriceFromSubmitted(submittedPrices, 'premium'),
+            fuelProducts: _productPricesFromSubmitted(submittedPrices),
+            image: image,
+          );
+        },
+      ),
     );
-  }
 
-  Widget _reportPriceField({
-    required TextEditingController controller,
-    required String label,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: TextField(
-        controller: controller,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: InputDecoration(
-          labelText: label,
-          prefixText: 'PHP ',
-          suffixText: '/ L',
-          border: const OutlineInputBorder(),
+    if (!mounted || success == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Price report submitted for verification.'
+              : 'Price report failed.',
         ),
       ),
     );
+  }
+
+  Future<bool> _confirmPriceReportSafetyNotice(
+    StationMarkerDetails details,
+  ) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          icon: const Icon(
+            Icons.gpp_maybe_outlined,
+            color: Color(0xFFE94B5A),
+            size: 34,
+          ),
+          title: const Text('Report responsibly'),
+          content: Text(
+            'Only upload a clear, genuine photo of the price board at ${_stationTitle(details)}. '
+            'Malicious, deceptive, unrelated, or inappropriate images may cause the report to be removed '
+            'and your PumpScout account to be suspended or terminated.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('I understand'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
   }
 
   Future<bool> submitPriceReport({
@@ -3932,6 +4278,40 @@ class _MapContainerState extends State<MapContainer> {
 
   @override
   Widget build(BuildContext context) {
+    if (accessToken.trim().isEmpty) {
+      return Container(
+        color: _psPageColor(context),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.key_off_outlined,
+              size: 42,
+              color: _psMutedTextColor(context),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Mapbox token is missing',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Start the app with the PumpScout Davao launch configuration.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _psMutedTextColor(context)),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (kIsWeb) {
       return Container(
         color: Theme.of(context).colorScheme.surface,
@@ -3973,9 +4353,9 @@ class _MapContainerState extends State<MapContainer> {
           styleUri: mapStyleUri,
           viewport: CameraViewportState(
             center: Point(coordinates: Position(125.6128, 7.0731)),
-            zoom: 16,
-            pitch: 55,
-            bearing: -20,
+            zoom: 14.5,
+            pitch: 0,
+            bearing: 0,
           ),
           onMapCreated: (mapbox) async {
             mapboxMap = mapbox;
@@ -3983,7 +4363,6 @@ class _MapContainerState extends State<MapContainer> {
             await mapbox.location.updateSettings(
               LocationComponentSettings(enabled: true, pulsingEnabled: true),
             );
-            startLocationUpdates();
           },
           onCameraChangeListener: (event) {
             handleMapCameraChanged(event.cameraState);
@@ -4000,7 +4379,12 @@ class _MapContainerState extends State<MapContainer> {
             if (enableDetailed3D) {
               await enable3DMapView();
             }
-            moveToCurrentLocation();
+          },
+          onMapLoadedListener: (_) => _startMapDataAfterBasemap(),
+          onMapLoadErrorListener: (event) {
+            debugPrint(
+              'Mapbox load error (${event.type.name}): ${event.message}',
+            );
           },
         ),
         if (activeRouteDashboard != null)
@@ -4089,6 +4473,190 @@ class _StationCluster {
   final double centerLng;
   final int count;
   final List<dynamic> stations;
+}
+
+class _PriceReportSheet extends StatefulWidget {
+  const _PriceReportSheet({
+    required this.stationName,
+    required this.reportItems,
+    required this.cloudinaryConfigured,
+    required this.onSubmit,
+  });
+
+  final String stationName;
+  final List<FuelDisplayItem> reportItems;
+  final bool cloudinaryConfigured;
+  final Future<bool> Function(
+    Map<String, double?> submittedPrices,
+    picker.XFile? image,
+  )
+  onSubmit;
+
+  @override
+  State<_PriceReportSheet> createState() => _PriceReportSheetState();
+}
+
+class _PriceReportSheetState extends State<_PriceReportSheet> {
+  late final Map<String, TextEditingController> priceControllers;
+  picker.XFile? selectedImage;
+  bool isSubmitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    priceControllers = {
+      for (final item in widget.reportItems)
+        item.fuelType: TextEditingController(
+          text: item.price?.toStringAsFixed(2) ?? '',
+        ),
+    };
+  }
+
+  @override
+  void dispose() {
+    for (final controller in priceControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final image = await picker.ImagePicker().pickImage(
+      source: picker.ImageSource.camera,
+      imageQuality: 75,
+    );
+    if (image == null || !mounted) return;
+    setState(() => selectedImage = image);
+  }
+
+  Future<void> _submit() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => isSubmitting = true);
+
+    final submittedPrices = {
+      for (final item in widget.reportItems)
+        item.fuelType: _parsePrice(priceControllers[item.fuelType]!.text),
+    };
+    final success = await widget.onSubmit(submittedPrices, selectedImage);
+    if (!mounted) return;
+    Navigator.of(context).pop(success);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 24 + bottomPadding),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Report prices',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(widget.stationName),
+            const SizedBox(height: 12),
+            _safetyBanner(context),
+            const SizedBox(height: 16),
+            for (final item in widget.reportItems)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: TextField(
+                  controller: priceControllers[item.fuelType],
+                  enabled: !isSubmitting,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: item.label,
+                    prefixText: 'PHP ',
+                    suffixText: '/ L',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: isSubmitting ? null : _pickImage,
+              icon: const Icon(Icons.photo_camera),
+              label: Text(
+                selectedImage == null
+                    ? 'Attach price board photo'
+                    : 'Photo attached',
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF2563EB),
+                side: const BorderSide(color: Color(0xFF2563EB)),
+              ),
+            ),
+            if (!widget.cloudinaryConfigured) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Photo upload needs Cloudinary setup. Price reports still save.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: isSubmitting ? null : _submit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
+                ),
+                child: Text(isSubmitting ? 'Submitting...' : 'Submit'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _safetyBanner(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE94B5A).withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFFE94B5A).withValues(alpha: 0.28),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFE94B5A),
+            size: 20,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              'Upload only a genuine station price-board photo. Malicious or inappropriate uploads may result in account suspension or termination.',
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CrowdStatusConfig {

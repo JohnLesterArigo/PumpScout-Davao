@@ -51,6 +51,7 @@ const String firebaseRealtimeDatabaseUrl =
 const String demoHardwareStationId = '1ab26M1Oe1CkO02Tayee';
 const int stationDemoRadiusMeters = 20000;
 const double priceReportMaxDistanceMeters = 3000;
+const int mapboxCacheSchemaVersion = 2;
 
 late final Future<FirebaseApp> firebaseInitialization;
 
@@ -66,11 +67,30 @@ bool requiresEmailVerification(User user) =>
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MapboxOptions.setAccessToken(accessToken);
+  await _prepareMapboxCache();
   firebaseInitialization = Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   ).timeout(const Duration(seconds: 15));
 
   runApp(const PumpScoutApp());
+}
+
+Future<void> _prepareMapboxCache() async {
+  if (accessToken.trim().isEmpty) return;
+
+  try {
+    final preferences = await SharedPreferences.getInstance();
+    final cachedVersion = preferences.getInt('mapboxCacheSchemaVersion') ?? 0;
+    if (cachedVersion >= mapboxCacheSchemaVersion) return;
+
+    await MapboxMapsOptions.clearData();
+    await preferences.setInt(
+      'mapboxCacheSchemaVersion',
+      mapboxCacheSchemaVersion,
+    );
+  } catch (error) {
+    debugPrint('Mapbox cache preparation failed: $error');
+  }
 }
 
 class PumpScoutApp extends StatefulWidget {

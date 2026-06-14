@@ -196,9 +196,9 @@ class _CommunityContributionsPageState
       if (!experienceCache.containsKey(contributorId)) {
         experienceCache[contributorId] =
             await buildContributorExperienceForUser(
-          contributorId: contributorId,
-          feedbackByReportId: feedbackByReportId,
-        );
+              contributorId: contributorId,
+              feedbackByReportId: feedbackByReportId,
+            );
       }
 
       items.add(
@@ -759,7 +759,8 @@ class _CommunityContributionsPageState
 
   Widget _communityInfoBanner() {
     return Container(
-      padding: const EdgeInsets.all(12),
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: _psPanelColor(context),
         borderRadius: BorderRadius.circular(16),
@@ -771,8 +772,11 @@ class _CommunityContributionsPageState
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: const Color(0xFF2563EB),
+              color: _psFilledActionColor(context),
               borderRadius: BorderRadius.circular(12),
+              border: _psIsDark(context)
+                  ? Border.all(color: _psBorderColor(context))
+                  : null,
             ),
             child: const Icon(Icons.verified, color: Colors.white),
           ),
@@ -783,8 +787,10 @@ class _CommunityContributionsPageState
               children: [
                 Text(
                   _communityFilterSubtitle(),
-                  style: const TextStyle(
-                    color: Color(0xFF2563EB),
+                  style: TextStyle(
+                    color: _psIsDark(context)
+                        ? _psPrimaryTextColor(context)
+                        : const Color(0xFF2563EB),
                     fontSize: 13,
                     fontWeight: FontWeight.w900,
                   ),
@@ -858,10 +864,14 @@ class _CommunityContributionsPageState
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF2563EB) : _psPanelColor(context),
+          color: selected
+              ? _psFilledActionColor(context)
+              : _psPanelColor(context),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: selected ? const Color(0xFF2563EB) : _psBorderColor(context),
+            color: selected && !_psIsDark(context)
+                ? const Color(0xFF2563EB)
+                : _psBorderColor(context),
           ),
           boxShadow: [
             BoxShadow(
@@ -902,13 +912,20 @@ class _CommunityContributionsPageState
         height: 62,
         padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF2563EB), Color(0xFF0EA5E9)],
+          gradient: LinearGradient(
+            colors: _psIsDark(context)
+                ? const [_psSoftPanel, _psPanelBlue]
+                : const [Color(0xFF2563EB), Color(0xFF0EA5E9)],
           ),
           borderRadius: BorderRadius.circular(18),
+          border: _psIsDark(context)
+              ? Border.all(color: _psBorderColor(context))
+              : null,
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF2563EB).withValues(alpha: 0.28),
+              color: _psIsDark(context)
+                  ? Colors.black.withValues(alpha: 0.18)
+                  : const Color(0xFF2563EB).withValues(alpha: 0.28),
               blurRadius: 20,
               offset: const Offset(0, 8),
             ),
@@ -919,11 +936,19 @@ class _CommunityContributionsPageState
             Container(
               width: 40,
               height: 40,
-              decoration: const BoxDecoration(
-                color: Colors.white,
+              decoration: BoxDecoration(
+                color: _psIsDark(context)
+                    ? const Color(0xFF3A3F48)
+                    : Colors.white,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.add, color: Color(0xFF2563EB), size: 24),
+              child: Icon(
+                Icons.add,
+                color: _psIsDark(context)
+                    ? Colors.white
+                    : const Color(0xFF2563EB),
+                size: 24,
+              ),
             ),
             const SizedBox(width: 10),
             const Expanded(
@@ -1010,7 +1035,8 @@ class _CommunityContributionsPageState
   Widget _communityCard(CommunityContribution item) {
     final distanceLabel = _communityDistanceLabel(item);
     return Container(
-      padding: const EdgeInsets.all(12),
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: _psPanelColor(context),
         borderRadius: BorderRadius.circular(16),
@@ -1026,12 +1052,10 @@ class _CommunityContributionsPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _communityBrandLogo(item),
-              const SizedBox(width: 10),
-              Expanded(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 340;
+              final details = Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1040,7 +1064,7 @@ class _CommunityContributionsPageState
                         Expanded(
                           child: Text(
                             _communityStationTitle(item),
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: _psPrimaryTextColor(context),
@@ -1064,7 +1088,7 @@ class _CommunityContributionsPageState
                         ?distanceLabel,
                         _formatDateTime(item.createdAt),
                       ].join(' • '),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: _psMutedTextColor(context),
@@ -1074,10 +1098,30 @@ class _CommunityContributionsPageState
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 8),
-              _communityLevelPill(item),
-            ],
+              );
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _communityBrandLogo(item),
+                      const SizedBox(width: 10),
+                      details,
+                      if (!compact) ...[
+                        const SizedBox(width: 8),
+                        _communityLevelPill(item),
+                      ],
+                    ],
+                  ),
+                  if (compact) ...[
+                    const SizedBox(height: 8),
+                    _communityLevelPill(item),
+                  ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: 10),
           if (item.photoUrl?.isNotEmpty == true) ...[
@@ -1102,23 +1146,29 @@ class _CommunityContributionsPageState
             ),
             const SizedBox(height: 12),
           ],
-          GridView.count(
-            crossAxisCount: 3,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 2.25,
-            children: [
-              for (final fuel in _communityFuelItems(item))
-                _communityPriceChip(fuel),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth < 360 ? 2 : 3;
+              return GridView.count(
+                crossAxisCount: columns,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: columns == 2 ? 2.4 : 2.25,
+                children: [
+                  for (final fuel in _communityFuelItems(item))
+                    _communityPriceChip(fuel),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _reactionButton(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 390;
+              final buttons = [
+                _reactionButton(
                   icon: item.myReaction == 'like'
                       ? Icons.favorite
                       : Icons.favorite_border,
@@ -1128,19 +1178,13 @@ class _CommunityContributionsPageState
                   selected: item.myReaction == 'like',
                   onPressed: () => saveReaction(item, 'like'),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _reactionButton(
+                _reactionButton(
                   icon: Icons.thumb_down_alt_outlined,
                   label: 'Disagree (${item.disagreeCount})',
                   selected: item.myReaction == 'disagree',
                   onPressed: () => saveReaction(item, 'disagree'),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton.icon(
+                OutlinedButton.icon(
                   onPressed: _isSavingReaction
                       ? null
                       : () => promptFeedback(item),
@@ -1151,8 +1195,31 @@ class _CommunityContributionsPageState
                     borderColor: _psBorderColor(context),
                   ),
                 ),
-              ),
-            ],
+              ];
+
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var index = 0; index < buttons.length; index++) ...[
+                      SizedBox(width: double.infinity, child: buttons[index]),
+                      if (index < buttons.length - 1)
+                        const SizedBox(height: 6),
+                    ],
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  for (var index = 0; index < buttons.length; index++) ...[
+                    Expanded(child: buttons[index]),
+                    if (index < buttons.length - 1)
+                      const SizedBox(width: 6),
+                  ],
+                ],
+              );
+            },
           ),
           if (item.publicComments.isNotEmpty) ...[
             const SizedBox(height: 1),
@@ -1466,6 +1533,7 @@ class _CommunityContributionsPageState
     }
     if (normalized.contains('unioil')) return 'assets/images/uniOil_logo.png';
     if (normalized.contains('mygas')) return 'assets/images/myGas_logo.png';
+    if (normalized.contains('phoenix')) return 'assets/images/phoenix_logo.jpg';
     return null;
   }
 

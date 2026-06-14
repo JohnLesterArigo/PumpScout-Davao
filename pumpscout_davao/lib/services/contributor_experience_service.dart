@@ -247,6 +247,20 @@ String contributorLevelTitle(int level) {
   return 'New Contributor';
 }
 
+int contributorXpRequiredForLevel(int targetLevel) {
+  if (targetLevel <= 1) return 0;
+
+  var level = 1;
+  var nextLevelXp = 250;
+  while (level < targetLevel) {
+    level += 1;
+    if (level == targetLevel) return nextLevelXp;
+    nextLevelXp += 250 + ((level - 2) * 100);
+  }
+
+  return nextLevelXp;
+}
+
 Future<ContributorExperience> buildContributorExperienceForUser({
   required String contributorId,
   required Map<String, ReportFeedbackAggregate> feedbackByReportId,

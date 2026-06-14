@@ -10,8 +10,6 @@ class _TopContributorsPage extends StatefulWidget {
 }
 
 class _TopContributorsPageState extends State<_TopContributorsPage> {
-  static const _communityBlue = Color(0xFF2563EB);
-
   _LeaderboardPeriod _period = _LeaderboardPeriod.allTime;
   late Future<List<ContributorSummary>> _contributorsFuture;
 
@@ -52,11 +50,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
             _stringField(
               data,
               'displayName',
-              fallback: _stringField(
-                data,
-                'email',
-                fallback: 'PumpScout User',
-              ),
+              fallback: _stringField(data, 'email', fallback: 'PumpScout User'),
             ),
           ),
         );
@@ -101,38 +95,39 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
       }
     }
 
-    final summaries = contributors.entries
-        .map((entry) {
-          final item = entry.value;
-          return ContributorSummary(
-            userId: entry.key,
-            name: item.name,
-            reportCount: item.periodReports,
-            helpfulVoteCount: item.periodHelpfulVotes,
-            experience: computeContributorExperience(
-              verifiedReportCount: item.totalReports,
-              helpfulVoteCount: item.totalHelpfulVotes,
-            ),
-          );
-        })
-        .where(
-          (item) =>
-              _period == _LeaderboardPeriod.allTime ||
-              item.reportCount > 0 ||
-              item.userId == currentUser?.uid,
-        )
-        .toList()
-      ..sort((a, b) {
-        final aPeriodXp =
-            a.reportCount * _xpPerVerifiedReport +
-            a.helpfulVoteCount * _xpPerHelpfulVote;
-        final bPeriodXp =
-            b.reportCount * _xpPerVerifiedReport +
-            b.helpfulVoteCount * _xpPerHelpfulVote;
-        final xpCompare = bPeriodXp.compareTo(aPeriodXp);
-        if (xpCompare != 0) return xpCompare;
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
+    final summaries =
+        contributors.entries
+            .map((entry) {
+              final item = entry.value;
+              return ContributorSummary(
+                userId: entry.key,
+                name: item.name,
+                reportCount: item.periodReports,
+                helpfulVoteCount: item.periodHelpfulVotes,
+                experience: computeContributorExperience(
+                  verifiedReportCount: item.totalReports,
+                  helpfulVoteCount: item.totalHelpfulVotes,
+                ),
+              );
+            })
+            .where(
+              (item) =>
+                  _period == _LeaderboardPeriod.allTime ||
+                  item.reportCount > 0 ||
+                  item.userId == currentUser?.uid,
+            )
+            .toList()
+          ..sort((a, b) {
+            final aPeriodXp =
+                a.reportCount * _xpPerVerifiedReport +
+                a.helpfulVoteCount * _xpPerHelpfulVote;
+            final bPeriodXp =
+                b.reportCount * _xpPerVerifiedReport +
+                b.helpfulVoteCount * _xpPerHelpfulVote;
+            final xpCompare = bPeriodXp.compareTo(aPeriodXp);
+            if (xpCompare != 0) return xpCompare;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
 
     return summaries;
   }
@@ -200,8 +195,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
             return _errorState(snapshot.error);
           }
 
-          final contributors =
-              snapshot.data ?? const <ContributorSummary>[];
+          final contributors = snapshot.data ?? const <ContributorSummary>[];
           return Column(
             children: [
               Expanded(
@@ -260,10 +254,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
           SizedBox(
             width: 92,
             height: 100,
-            child: Image.asset(
-              'assets/images/trophy.png',
-              fit: BoxFit.contain,
-            ),
+            child: Image.asset('assets/images/trophy.png', fit: BoxFit.contain),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -328,7 +319,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
       children: [
         Row(
           children: [
-            Icon(icon, color: _communityBlue, size: 16),
+            Icon(icon, color: _psActionColor(context), size: 16),
             const SizedBox(width: 5),
             Text(
               value,
@@ -402,8 +393,13 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
           duration: const Duration(milliseconds: 180),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? _communityBlue : Colors.transparent,
+            color: selected
+                ? _psFilledActionColor(context)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(18),
+            border: selected && _psIsDark(context)
+                ? Border.all(color: _psBorderColor(context))
+                : null,
           ),
           child: Text(
             label,
@@ -453,6 +449,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
       const Color(0xFF2563EB),
     ];
     final avatarColor = colors[(rank - 1) % colors.length];
+    final displayAvatarColor = _psDecorativeColor(context, avatarColor);
 
     return Container(
       decoration: BoxDecoration(
@@ -467,8 +464,8 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
           SizedBox(width: 34, child: _rankAsset(rank)),
           CircleAvatar(
             radius: 18,
-            backgroundColor: avatarColor.withValues(alpha: 0.15),
-            child: Icon(Icons.person, color: avatarColor, size: 22),
+            backgroundColor: displayAvatarColor.withValues(alpha: 0.15),
+            child: Icon(Icons.person, color: displayAvatarColor, size: 22),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -499,13 +496,17 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFDDF8E9),
+                          color: _psIsDark(context)
+                              ? _psSoftPanelColor(context)
+                              : const Color(0xFFDDF8E9),
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Text(
+                        child: Text(
                           'You',
                           style: TextStyle(
-                            color: Color(0xFF148653),
+                            color: _psIsDark(context)
+                                ? _psPrimaryTextColor(context)
+                                : const Color(0xFF148653),
                             fontSize: 8,
                             fontWeight: FontWeight.w800,
                           ),
@@ -528,8 +529,14 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                   child: LinearProgressIndicator(
                     value: contributor.experience.progress,
                     minHeight: 3,
-                    backgroundColor: _communityBlue.withValues(alpha: 0.12),
-                    valueColor: const AlwaysStoppedAnimation(_communityBlue),
+                    backgroundColor: _psIsDark(context)
+                        ? _psDarkBorder
+                        : _psLevelProgressColor(
+                            contributor.experience.progress,
+                          ).withValues(alpha: 0.14),
+                    valueColor: AlwaysStoppedAnimation(
+                      _psLevelProgressColor(contributor.experience.progress),
+                    ),
                   ),
                 ),
               ],
@@ -566,7 +573,11 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
             ],
           ),
           const SizedBox(width: 4),
-          Icon(Icons.chevron_right, color: _psMutedTextColor(context), size: 18),
+          Icon(
+            Icons.chevron_right,
+            color: _psMutedTextColor(context),
+            size: 18,
+          ),
         ],
       ),
     );
@@ -607,10 +618,10 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
           children: [
             CircleAvatar(
               radius: 17,
-              backgroundColor: _communityBlue.withValues(alpha: 0.12),
-              child: const Icon(
+              backgroundColor: _psActionColor(context).withValues(alpha: 0.12),
+              child: Icon(
                 Icons.groups_2_outlined,
-                color: _communityBlue,
+                color: _psActionColor(context),
                 size: 19,
               ),
             ),
@@ -642,7 +653,11 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
               icon: const Icon(Icons.add, size: 16),
               label: const Text('New Report'),
               style: FilledButton.styleFrom(
-                backgroundColor: _communityBlue,
+                backgroundColor: _psFilledActionColor(context),
+                foregroundColor: Colors.white,
+                side: _psIsDark(context)
+                    ? BorderSide(color: _psBorderColor(context))
+                    : null,
                 visualDensity: VisualDensity.compact,
                 textStyle: const TextStyle(
                   fontSize: 10,
@@ -695,26 +710,87 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Earn experience',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 16),
-            _xpRule(Icons.verified_outlined, 'Verified fuel report', '100 XP'),
-            _xpRule(Icons.thumb_up_alt_outlined, 'Helpful vote', '10 XP'),
-            const SizedBox(height: 14),
-            const Text(
-              'Only admin-verified reports count. Earn XP to level up from New Contributor to PumpScout Legend.',
-              style: TextStyle(height: 1.4),
-            ),
-          ],
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Earn experience',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 16),
+              _xpRule(Icons.verified_outlined, 'Verified fuel report', '100 XP'),
+              _xpRule(Icons.thumb_up_alt_outlined, 'Helpful vote', '10 XP'),
+              const SizedBox(height: 10),
+              Text(
+                'Level milestones',
+                style: TextStyle(
+                  color: _psPrimaryTextColor(context),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 10),
+              _levelMilestone(1),
+              _levelMilestone(2),
+              _levelMilestone(3),
+              _levelMilestone(5),
+              _levelMilestone(7),
+              _levelMilestone(10),
+              const SizedBox(height: 12),
+              const Text(
+                'XP is cumulative. Only admin-verified reports count, and helpful votes received on those reports add bonus XP.',
+                style: TextStyle(height: 1.4),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _levelMilestone(int level) {
+    final requiredXp = contributorXpRequiredForLevel(level);
+    final isLegend = level == 10;
+    final color = isLegend
+        ? const Color(0xFFF59E0B)
+        : _psActionColor(context);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _psSoftPanelColor(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _psBorderColor(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isLegend ? Icons.emoji_events : Icons.workspace_premium_outlined,
+            color: color,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Level $level - ${contributorLevelTitle(level)}',
+              style: TextStyle(
+                color: _psPrimaryTextColor(context),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$requiredXp XP',
+            style: TextStyle(color: color, fontWeight: FontWeight.w900),
+          ),
+        ],
       ),
     );
   }
@@ -724,7 +800,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
-          Icon(icon, color: _communityBlue),
+          Icon(icon, color: _psActionColor(context)),
           const SizedBox(width: 10),
           Expanded(child: Text(label)),
           Text(
