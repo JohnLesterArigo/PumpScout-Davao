@@ -74,6 +74,24 @@ service cloud.firestore {
         );
     }
 
+    match /leaderboardProfiles/{userId} {
+      allow read: if signedIn();
+
+      allow create, update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.keys()
+            .hasOnly(["uid", "displayName", "updatedAt"])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() > 0
+          && request.resource.data.displayName.size() <= 80
+        );
+
+      allow delete: if isAdmin();
+    }
+
     match /priceReports/{reportId} {
       // Anyone can read verified community posts; owners/admins can read their own pending/rejected.
       allow read: if isAdmin()

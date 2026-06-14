@@ -178,6 +178,11 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     await userRef.set(userData, SetOptions(merge: true));
+    try {
+      await syncPublicLeaderboardProfile(user, displayName: displayName);
+    } catch (error) {
+      debugPrint('Public leaderboard profile sync failed: $error');
+    }
   }
 
   void toggleMode() {

@@ -37,26 +37,74 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
             ? currentUser.displayName!.trim()
             : currentUser.email ?? 'You',
       );
+
+      try {
+        await syncPublicLeaderboardProfile(currentUser);
+      } catch (error) {
+        debugPrint('Leaderboard profile sync failed: $error');
+      }
     }
 
     try {
-      final users = await FirebaseFirestore.instance.collection('users').get();
-      for (final doc in users.docs) {
+      final profiles = await FirebaseFirestore.instance
+          .collection('leaderboardProfiles')
+          .get();
+      for (final doc in profiles.docs) {
         final data = doc.data();
         final id = _stringField(data, 'uid', fallback: doc.id);
         contributors.putIfAbsent(
           id,
           () => _LeaderboardAccumulator(
-            _stringField(
-              data,
-              'displayName',
-              fallback: _stringField(data, 'email', fallback: 'PumpScout User'),
-            ),
+            _stringField(data, 'displayName', fallback: 'PumpScout User'),
           ),
         );
       }
     } catch (error) {
-      debugPrint('Leaderboard users load failed: $error');
+      debugPrint('Leaderboard profiles load failed: $error');
+    }
+
+    if (currentUser != null) {
+      try {
+        final currentUserDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUser.uid)
+            .get();
+        final isAdmin =
+            _stringField(currentUserDoc.data() ?? const {}, 'role') == 'admin';
+        if (isAdmin) {
+          final users = await FirebaseFirestore.instance
+              .collection('users')
+              .get();
+          final batch = FirebaseFirestore.instance.batch();
+          for (final doc in users.docs) {
+            final data = doc.data();
+            final id = _stringField(data, 'uid', fallback: doc.id);
+            final displayName = _stringField(
+              data,
+              'displayName',
+              fallback: 'PumpScout User',
+            );
+            contributors.putIfAbsent(
+              id,
+              () => _LeaderboardAccumulator(displayName),
+            );
+            batch.set(
+              FirebaseFirestore.instance
+                  .collection('leaderboardProfiles')
+                  .doc(id),
+              {
+                'uid': id,
+                'displayName': displayName,
+                'updatedAt': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true),
+            );
+          }
+          if (users.docs.isNotEmpty) await batch.commit();
+        }
+      } catch (error) {
+        debugPrint('Leaderboard profile backfill failed: $error');
+      }
     }
 
     final feedback = await loadFeedbackAggregatesByReportId();
@@ -270,7 +318,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  isCurrentUser ? '${leader.name} (You)' : leader.name,
+                  isCurrentUser ? '${leader.name}' : leader.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -477,7 +525,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                     Flexible(
                       child: Text(
                         isCurrentUser
-                            ? '${contributor.name} (You)'
+                            ? '${contributor.name}'
                             : contributor.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,

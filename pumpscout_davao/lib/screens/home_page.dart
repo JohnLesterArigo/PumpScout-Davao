@@ -2808,3 +2808,4 @@ class _HomeInsightChartPainter extends CustomPainter {
     return oldDelegate.values != values || oldDelegate.color != color;
   }
 }
+  

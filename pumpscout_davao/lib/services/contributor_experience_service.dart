@@ -212,6 +212,26 @@ List<CommunityFeedbackReply> _feedbackReplies(Map<String, dynamic> data) {
 const int _xpPerVerifiedReport = 100;
 const int _xpPerHelpfulVote = 10;
 
+Future<void> syncPublicLeaderboardProfile(
+  User user, {
+  String? displayName,
+}) async {
+  final resolvedName = displayName?.trim().isNotEmpty == true
+      ? displayName!.trim()
+      : user.displayName?.trim().isNotEmpty == true
+      ? user.displayName!.trim()
+      : 'PumpScout User';
+
+  await FirebaseFirestore.instance
+      .collection('leaderboardProfiles')
+      .doc(user.uid)
+      .set({
+        'uid': user.uid,
+        'displayName': resolvedName,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+}
+
 ContributorExperience computeContributorExperience({
   required int verifiedReportCount,
   required int helpfulVoteCount,
