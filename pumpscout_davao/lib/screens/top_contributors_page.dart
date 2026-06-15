@@ -278,9 +278,6 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
   }
 
   Widget _heroCard(ContributorSummary leader) {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    final isCurrentUser = currentUser?.uid == leader.userId;
-
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
       decoration: BoxDecoration(
@@ -318,7 +315,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  isCurrentUser ? '${leader.name}' : leader.name,
+                  leader.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -524,9 +521,7 @@ class _TopContributorsPageState extends State<_TopContributorsPage> {
                   children: [
                     Flexible(
                       child: Text(
-                        isCurrentUser
-                            ? '${contributor.name}'
-                            : contributor.name,
+                        contributor.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

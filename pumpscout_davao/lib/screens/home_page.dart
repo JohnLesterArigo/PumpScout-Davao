@@ -1532,15 +1532,17 @@ class _HomePageState extends State<HomePage> {
           debugPrint('Home forecast load failed: $error');
         }
 
+        if (forecast == null) continue;
+
         insights.add(
           _HomeFuelInsight(
             station: station,
             fuelType: fuelType,
             currentPrice: currentPrice,
-            predictedPrice: forecast?.predictedPrice ?? currentPrice,
-            confidencePercent: forecast?.confidencePercent,
-            history: forecast?.history ?? const <double>[],
-            hasForecast: forecast != null,
+            predictedPrice: forecast.predictedPrice,
+            confidencePercent: forecast.confidencePercent,
+            history: forecast.history,
+            hasForecast: true,
           ),
         );
       }
@@ -2053,7 +2055,7 @@ class _HomePageState extends State<HomePage> {
           _sectionTitle(context, 'Fuel Forecast', icon: Icons.insights),
           const Spacer(),
           Text(
-            'No station prices available yet.',
+            'No forecast is available yet.',
             style: TextStyle(
               color: _psPrimaryTextColor(context),
               fontWeight: FontWeight.w800,
@@ -2061,8 +2063,18 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Verified station prices will appear here as forecast cards.',
+            'A station needs at least three verified price reports for the same fuel.',
             style: TextStyle(color: _psMutedTextColor(context)),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () {
+              setState(() {
+                fuelInsightsFuture = loadHomeFuelInsights();
+              });
+            },
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Retry forecast'),
           ),
         ],
       ),
@@ -2808,4 +2820,3 @@ class _HomeInsightChartPainter extends CustomPainter {
     return oldDelegate.values != values || oldDelegate.color != color;
   }
 }
-  

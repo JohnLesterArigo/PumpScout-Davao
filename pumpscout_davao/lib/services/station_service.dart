@@ -113,6 +113,7 @@ Future<List<PriceReport>> fetchPriceReports(
       final snapshot = await FirebaseFirestore.instance
           .collection('priceReports')
           .where('stationId', isEqualTo: stationId)
+          .where('status', isEqualTo: 'verified')
           .get();
       addVerifiedReports(snapshot.docs);
     }
@@ -121,6 +122,7 @@ Future<List<PriceReport>> fetchPriceReports(
       final keySnapshot = await FirebaseFirestore.instance
           .collection('priceReports')
           .where('stationKey', isEqualTo: stationKey)
+          .where('status', isEqualTo: 'verified')
           .get();
       addVerifiedReports(keySnapshot.docs);
     }
@@ -152,6 +154,9 @@ Future<List<PriceReport>> fetchPriceReports(
     final reports = reportsById.values.toList();
     reports.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
+    debugPrint(
+      'Loaded ${reports.length} verified price reports for ${details.name}.',
+    );
     return reports.length > 12 ? reports.sublist(reports.length - 12) : reports;
   } catch (error) {
     debugPrint('Price history load failed: $error');
