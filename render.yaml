@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: pumpscout-forecast-api
+    env: python
+    rootDir: forecast_api
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    autoDeploy: true
+
